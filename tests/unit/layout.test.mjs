@@ -102,3 +102,22 @@ test("panels sit panelGap below the islands whatever Hyprland's gaps are", () =>
   assert.equal(Layout.panelBarSize(m, 400), 0, "never negative");
   assert.equal(Layout.panelBarSize(m, NaN), islandBottom + m.panelGap - 0, "an unknown gap counts as none");
 });
+
+test("dynamic clock width keeps tier stable via max demand while title reclaims idle space", () => {
+  // Reserve expanded clock width (175) for tier selection, while idle clock is 145.
+  const idleClock = 145;
+  const expandedClock = 175;
+  const screenWidth = 1536;
+  const tier = Layout.chooseTier(screenWidth, demands, m, "full");
+  assert.equal(tier, "full");
+  const idleTitle = Layout.titleWidth(tier, screenWidth, { center: idleClock, leftFixed: demands.full.leftFixed }, m);
+  const expandedTitle = Layout.titleWidth(tier, screenWidth, { center: expandedClock, leftFixed: demands.full.leftFixed }, m);
+  assert.ok(idleTitle > expandedTitle, `idle title (${idleTitle}) should exceed expanded title (${expandedTitle})`);
+  assert.ok(expandedTitle >= m.titleMin, "expanded title still respects titleMin");
+  // Verify no overlap with centered clock in both idle and expanded states.
+  const idleClockLeft = Math.round((screenWidth - idleClock) / 2);
+  const expandedClockLeft = Math.round((screenWidth - expandedClock) / 2);
+  const leftEdge = m.sideMargin + demands.full.leftFixed;
+  assert.ok(leftEdge + idleTitle + m.centerClearance <= idleClockLeft, "idle clearance preserved");
+  assert.ok(leftEdge + expandedTitle + m.centerClearance <= expandedClockLeft, "expanded clearance preserved");
+});

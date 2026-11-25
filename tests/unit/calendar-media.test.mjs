@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { load } from "./qmljs.mjs";
 
 const C = load("logic/Calendar.js");
+const CF = load("logic/ClockFormat.js");
 const M = load("logic/Media.js");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const day = (year, month, d) => ({ year, month, day: d });
@@ -96,4 +97,15 @@ test("progress is bounded and -1 when unknown", () => {
   assert.equal(M.progress(player({ position: 10, length: 0 })), -1);
   assert.equal(M.progress(player({ position: 10, length: 100, positionSupported: false })), -1);
   assert.equal(M.progress(null), -1);
+});
+
+test("clock format withSeconds and stableDigits keep tick measurements invariant", () => {
+  assert.equal(CF.withSeconds("HH:mm"), "HH:mm:ss");
+  assert.equal(CF.withSeconds("h:mm AP"), "h:mm:ss AP");
+  assert.equal(CF.withSeconds("HH:mm:ss"), "HH:mm:ss");
+  assert.equal(CF.withSeconds("HH"), "HH");
+  assert.equal(CF.stableDigits("09:05"), "88:88");
+  assert.equal(CF.stableDigits("09:05:00"), CF.stableDigits("09:05:59"));
+  assert.equal(CF.stableDigits("9:05:01 AM"), CF.stableDigits("9:05:49 AM"));
+  assert.equal(CF.stableDigits(""), "");
 });

@@ -92,10 +92,14 @@ PanelWindow {
   }
   readonly property bool titleWanted: bar.settings.showTitle
 
+  // Tier selection reserves the clock's expanded width (maxDemandFor) so
+  // hovering the clock or opening the calendar never flips the tier under the
+  // pointer, while titleMaxWidth uses the active width so the title island
+  // reclaims idle space and yields cleanly when the clock expands.
   readonly property var demands: ({
-    full: { center: clock.demandFor("full"), leftFixed: leftWidth + m.groupGap, titleMin: titleWanted ? m.titleMin : 0, rightFixed: rightFor("full") },
-    compact: { center: clock.demandFor("compact"), leftFixed: leftWidth + m.groupGap, titleMin: titleWanted ? m.titleMin : 0, rightFixed: rightFor("compact") },
-    minimal: { center: clock.demandFor("minimal"), leftFixed: leftWidth, titleMin: 0, rightFixed: rightFor("minimal") }
+    full: { center: clock.maxDemandFor("full"), leftFixed: leftWidth + m.groupGap, titleMin: titleWanted ? m.titleMin : 0, rightFixed: rightFor("full") },
+    compact: { center: clock.maxDemandFor("compact"), leftFixed: leftWidth + m.groupGap, titleMin: titleWanted ? m.titleMin : 0, rightFixed: rightFor("compact") },
+    minimal: { center: clock.maxDemandFor("minimal"), leftFixed: leftWidth, titleMin: 0, rightFixed: rightFor("minimal") }
   })
 
   property string autoTier: "full"
@@ -108,7 +112,10 @@ PanelWindow {
   onDemandsChanged: Qt.callLater(surface.updateTier)
   onScreenWidthChanged: Qt.callLater(surface.updateTier)
 
-  readonly property real titleMaxWidth: titleWanted ? Layout.titleWidth(tier, screenWidth, demands[tier], m) : 0
+  readonly property real activeClockWidth: Math.max(clock.demandFor(tier), Math.ceil(clock.implicitWidth))
+  readonly property real titleMaxWidth: titleWanted
+    ? Layout.titleWidth(tier, screenWidth, { center: activeClockWidth, leftFixed: demands[tier].leftFixed }, m)
+    : 0
 
   // -------------------------------------------------------------- islands
 

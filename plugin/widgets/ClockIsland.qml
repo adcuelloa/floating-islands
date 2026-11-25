@@ -100,9 +100,23 @@ Island {
   // The day and month in the language's own order ("29 Oct", "10月29日").
   readonly property string dateText: now.toLocaleString(locale, Calendar.patterns(localeTag).shortDate)
 
-  // The time's slot: as wide as the detailed time, so revealing seconds
-  // moves neither the island's edges nor the date beside it.
-  readonly property real timeSlot: Math.ceil(Math.max(timeMetrics.advanceWidth, detailMetrics.advanceWidth))
+  // The time's slot: fits the idle time format by default, and expands to fit
+  // seconds while hovered (after detailDelay), while the calendar is open, or
+  // when timeFormat explicitly includes seconds.
+  readonly property real compactTimeSlot: Math.ceil(timeMetrics.advanceWidth)
+  readonly property real detailTimeSlot: Math.ceil(Math.max(timeMetrics.advanceWidth, detailMetrics.advanceWidth))
+  readonly property real targetTimeSlot: secondsShown ? detailTimeSlot : compactTimeSlot
+  property real timeSlot: targetTimeSlot
+
+  Behavior on timeSlot {
+    enabled: root.theme.widget > 0
+    NumberAnimation {
+      duration: root.theme.widget
+      easing.type: Easing.Bezier
+      easing.bezierCurve: root.theme.easeOut
+    }
+  }
+
   readonly property real buttonPadding: Math.round(14 * theme.m.scale)
   readonly property real partGap: Math.round(12 * theme.m.scale)
   readonly property real wordGap: Math.round(5 * theme.m.scale)
@@ -110,11 +124,9 @@ Island {
   paddingLeft: Math.round(6 * theme.m.scale)
   paddingRight: Math.round(6 * theme.m.scale)
 
-  function demandFor(forTier) {
+  function demandForSlot(forTier, slot) {
     var p = ClockFormat.partsFor(forTier)
-    // The detailed time's width is reserved up front, so revealing seconds
-    // never moves the neighbours or changes the tier.
-    var inner = timeSlot
+    var inner = slot
     if (p.date) inner += partGap + dateMetrics.advanceWidth
     if (p.weekday) inner += wordGap + weekdayMetrics.advanceWidth
     // TextMetrics and the drawn Text can differ by a fraction of a pixel;
@@ -122,8 +134,22 @@ Island {
     return Math.ceil(inner + 2 * buttonPadding + paddingLeft + paddingRight + 2 * borderWidth) + 1
   }
 
+  // Current target width for this tier (compact while idle, detailed while
+  // seconds are shown), used so flexible neighbours can adapt.
+  function demandFor(forTier) {
+    return demandForSlot(forTier, targetTimeSlot)
+  }
+
+  // Maximum width for this tier (with seconds shown), used for responsive
+  // tier selection so hovering the clock or opening the calendar never flips
+  // the tier under the pointer.
+  function maxDemandFor(forTier) {
+    return demandForSlot(forTier, detailTimeSlot)
+  }
+
   SystemClock {
     id: clock
+    objectName: "systemClock"
     precision: root.secondsShown ? SystemClock.Seconds : SystemClock.Minutes
   }
 
@@ -142,8 +168,8 @@ Island {
     onTriggered: root.detailed = hover.hovered
   }
 
-  TextMetrics { id: timeMetrics; font: timeLabel.font; text: root.compactTimeText }
-  TextMetrics { id: detailMetrics; font: timeLabel.font; text: root.detailTimeText }
+  TextMetrics { id: timeMetrics; font: timeLabel.font; text: ClockFormat.stableDigits(root.compactTimeText) }
+  TextMetrics { id: detailMetrics; font: timeLabel.font; text: ClockFormat.stableDigits(root.detailTimeText) }
   TextMetrics { id: weekdayMetrics; font: weekdayLabel.font; text: root.weekdayText }
   TextMetrics { id: dateMetrics; font: dateLabel.font; text: root.dateText }
 
@@ -168,8 +194,10 @@ Island {
     Text {
       id: timeLabel
 
+      objectName: "clockTime"
       anchors.verticalCenter: parent.verticalCenter
       width: root.timeSlot
+      clip: true
       horizontalAlignment: Text.AlignHCenter
       textFormat: Text.PlainText
       text: root.timeText

@@ -21,3 +21,9 @@ function withSeconds(format) {
   var at = format.lastIndexOf("mm")
   return at === -1 ? format : format.slice(0, at + 2) + ":ss" + format.slice(at + 2)
 }
+
+// Normalizes ASCII digits to "8" for stable width measurement so individual
+// second or minute ticks never jitter the clock island's width.
+function stableDigits(text) {
+  return String(text || "").replace(/[0-9]/g, "8")
+}
