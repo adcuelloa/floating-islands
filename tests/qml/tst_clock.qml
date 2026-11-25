@@ -75,7 +75,7 @@ Item {
       if (sysClock) sysClock.date = new Date(2026, 9, 28, 9, 5, 0)
       mouseMove(harness, 10, 10)
       tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
-      wait(0)
+      wait(32)
       Commons.Style.reduceMotion = false
     }
 
@@ -434,7 +434,7 @@ Item {
           prevPrefixX = colPrefixX
         }
       }
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
       verify(collapseIntermediates > 0, "observed intermediate collapse frames")
       compare(secondsClip.width, 0)
       verify(!secondsClip.visible, "seconds clip hidden after collapse")
