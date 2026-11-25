@@ -1,9 +1,17 @@
 # Upstream Watch and Compatibility Canary
 
-Status: design. Implemented so far: the capability inventory
-(`docs/upstream/capabilities.json`, validated by
-`tests/unit/upstream-inventory.test.mjs`). The watcher and the canary are not
-built yet.
+Status: design. Implemented so far:
+
+- the capability inventory (`docs/upstream/capabilities.json`, validated by
+  `tests/unit/upstream-inventory.test.mjs`);
+- the watcher's read-only `inspect` step and aggregation layer
+  (`.github/upstream-watch/`, §3.0–§3.0.1), with synthetic fixture tests
+  (`tests/unit/upstream-watch.test.mjs`, `tests/unit/upstream-aggregate.test.mjs`);
+- the dispatch-only, read-only `upstream-watch.yml` workflow (`inspect` job
+  only, `contents: read`, no issue permissions, no schedule).
+
+Not implemented or enabled yet: automated issue reporting (`report` job), the
+state issue and labels, scheduled runs, and the compatibility canary.
 
 Floating Islands runs inside Omarchy's shell. This document describes how the
 project notices upstream changes, how it judges their impact on the bar, and
@@ -89,18 +97,121 @@ each widget stay open to community feedback.
 
 Workflow `upstream-watch.yml`:
 
-- triggers: `schedule` (`17 */12 * * *`, minute offset to avoid the
-  top-of-hour queue) and `workflow_dispatch` (inputs: `dry_run`, `mode`);
-- `mode` is `incremental` or `reconcile`, plus a `reset_state` used only for
-  bootstrap.
+- trigger today: `workflow_dispatch` only, with `dry_run` (default `true`,
+  informational only; both values remain strictly read-only until reporting is
+  implemented);
+- later (step 4): `schedule` (`17 */12 * * *`, minute offset to avoid the
+  top-of-hour queue), `mode` (`incremental` or `reconcile`), `reset_state`
+  for bootstrap, and the `report` job.
 
 | Job | Permissions | Does |
 |---|---|---|
-| `inspect` | `contents: read` | discovers refs; clones blobless with `--no-checkout`; materialises the needed files with `git show`; runs the detectors; writes `report.json`; renders a preview to the step summary |
-| `report` (skipped on `dry_run`) | `issues: write`, `contents: read` | validates `report.json`; plans and applies issue upserts; advances state last |
+| `inspect` (implemented) | `contents: read` | discovers refs; blobless sparse clone; runs the detectors; writes `report.json` and renders a preview to the step summary. No issue permission and no secrets. |
+| `report` (planned, skipped on `dry_run`) | `issues: write`, `contents: read` | validates `report.json`; plans and applies issue upserts; advances state last |
 
 Workflow-level `permissions: {}`. Concurrency:
 `group: upstream-watch, cancel-in-progress: false`, so runs are serialised.
+
+### 3.0 Inspect (implemented, read-only)
+
+```bash
+node .github/upstream-watch/inspect.mjs --work <dir> \
+  [--state <file>] [--emit-state <file>] [--report report.json] [--summary summary.md]
+```
+
+- `lib.mjs` holds the pure detectors, range planning, state parsing, report
+  validation and rendering. `inspect.mjs` is the only part that touches git or
+  the file system. Node built-ins only.
+- Discovery is one `git ls-remote --symref`. The default branch and the
+  release line (the highest `vX-Y-Z` branch without a final tag) are read
+  from it. No default branch or no release branch fails the run.
+- The clone is blobless, single-branch, sparse (`shell`, `bin`,
+  `config/omarchy`, `default/hypr`) and reused between runs. git runs without
+  user or system configuration (no credential helpers, filters or hooks), with
+  `core.symlinks=false` and `protocol.ext.allow=never`. Symlinks, files over
+  1 MB and paths outside the path pattern are skipped.
+- D1 runs `tests/contract/check-contract.sh --advisory --porcelain` against
+  each checked out tree and reconciles every row by line number, metadata and
+  summary totals. Each row carries a stable identity (`[area#hash] reason`);
+  missing, duplicated or incomplete contract results fail closed. That script
+  only greps. Nothing from upstream is executed.
+- The state is a local JSON file with the schema of §3.2 (`refs`,
+  `first_seen`, `tags_seen`, `release_branches_seen`, `reset`). Without a
+  state the range is cumulative from the inventory's `revisions.baseline`.
+  `--emit-state` writes the next state only when every target succeeded.
+- Exit codes: `0` report written; `3` report written but a target failed, so
+  no cursor may advance; `2` fail closed (bad baseline, state, discovery or
+  report), nothing written.
+- Tests: `tests/unit/upstream-watch.test.mjs`, synthetic fixtures only. They
+  never contact the real upstream.
+
+Differences from the design below, kept on purpose:
+
+- **Attribution, not introduction.** Each raw finding carries
+  `attribution: {sha, basis}`. The basis says what the SHA is:
+  `first-commit-touching-file` (the first commit in the range that touched the
+  subject's file, from `git log <range> -- <path>`; **not** verified as the
+  commit that made this change), `first-seen-at-head` (history rewrite),
+  `recorded-in-state`, `release-ref`, or `unavailable` (SHA `null`). Pickaxe
+  searches (`git log -S/-G`) would need every blob in the range, which defeats
+  the blobless clone. Fingerprints stay stable across reruns either way.
+- **Scope and capabilities.** Every raw finding lists **all** capabilities
+  its path, manifest id or contract area maps to. `primary` is set only when
+  that mapping names exactly one; otherwise it is `null` and `scope` is
+  `multi`. Unmapped findings are scoped `contract:<area>` or
+  `unmapped:<id or path>`. A manifest id that does not match
+  `[A-Za-z0-9._-]` is replaced by `manifest-<hash>`.
+- **D2 severity.** An API removal is `breaking` only when a **required**
+  (non-conditional) contract row on the same file names that symbol. The
+  inventory's prose API (`PluginBarApi._* callbacks`) is too coarse, and
+  conditional (`F?`/`E?`) rows stay advisory (`review`).
+- **Certainty.** `confirmed` (D1, D3, D9), `textual` (a source fact whose
+  impact is unknown) or `uncertain` (D8, and everything else in a
+  `history-rewrite` range). Every detector is static. `confirmed` means a
+  source or contract check failed, not that the bar failed at runtime, and
+  rendered text says so: "static check failed (runtime impact not
+  demonstrated)". Only the canary (§4, not implemented) could demonstrate a
+  runtime incompatibility.
+- **Resource bounds.** The clone's object store must stay under 1 GiB
+  (checked after fetch, fallback baseline fetch, blob hydration and before
+  publication) and each analysed revision under 5000 files, 64 MiB total and
+  1 MiB per detector input. Exceeding the object bound stops the run with
+  nothing written (exit `2`); exceeding a tree or detector-input bound fails
+  the affected target (exit `3`), preserves healthy targets' findings and never
+  advances state.
+- **D8 scope.** Watch tokens are matched as whole words, only in added lines
+  of the blocker's own capability files and the host API files.
+
+### 3.0.1 Aggregation (implemented)
+
+`aggregate.mjs` turns the raw findings of a validated report into items. Raw
+findings stay in `report.json` unchanged. Every raw finding belongs to exactly
+one item; the function throws otherwise. An item keeps every member's
+evidence. Fixed rules, applied in order:
+
+1. **Incompatibility.** Contract regressions, API removals, manifest removals
+   and removed paths are linked when they describe the same thing (contract
+   row + named API removal or removed file; removed `qmldir` type + removed
+   file; removed manifest + removed file). Each connected group with a
+   `breaking` member is one `breaking` item; conditional-only (`WARN` /
+   `review`) contract regressions stay `modification` with an opt-in note.
+2. **New capability.** Independent manifest leaders are reserved first so each
+   raw finding belongs to exactly one item. A `manifest.json` plugin groups
+   other findings in its own directory; flat `*.manifest.json` widget manifests
+   remain independent items. The item says it is a finding, not an approved
+   feature.
+3. **Shortcuts.** Binding files are linked when a combination is removed from
+   one and added to another. Each linked set is one item (`migration` when it
+   spans files) and lists every binding. It is a `modification` when it maps
+   to a capability or touches `SUPER+CTRL+1..9` / `SUPER+CTRL+ALT+*`;
+   otherwise `informational`.
+4. **Possible blocker resolutions.** One `uncertain` item per blocker.
+5. **Releases and restored rows.** `informational`, one each.
+6. **Everything else.** One item per file. Pure refactors are `informational`;
+   items whose members are all uncertain are `uncertain`.
+
+Items with the same topic on trunk and on the release line are merged so one
+break is one item listing both refs. `topic = sha256(category, anchor)`.
 
 ### 3.1 Detectors (deterministic)
 
@@ -365,11 +476,13 @@ maintainer. The workflow never creates labels or changes settings.
 | Inventory | `tests/unit/upstream-inventory.test.mjs` (in `tests/run-all.sh` and CI) |
 | Detectors | fixture tree pairs, one per detector, with exact expected findings |
 | Fingerprints | stable across SHAs and orderings; new subject means new fingerprint; removal, restore and removal gives two fingerprints |
+| Aggregation | `tests/unit/upstream-aggregate.test.mjs`: contract/API/path correlation, independent failures in one file, several capabilities without a primary, shortcut migration, new capability vs added API vs refactor, cross-ref merge, qualified attribution |
 | Upsert plan | pure `plan(issues, findings)` table tests: rules 1–4, closed-issue respect, cap and digest, retry after partial apply |
 | State | valid, missing, corrupt, foreign author, two state issues, changed `updated_at`, non-ancestor cursor |
 | Rendering | backtick runs, `@handles`, `#123`, `<!--` markers, bidi characters, oversized text, odd paths |
 | Artifact | size and count caps, unknown keys, bad SHA, bad label |
-| Workflows | `zizmor`; a `dry_run` dispatch renders to the step summary with the `report` job skipped |
+| Resource bounds | `tests/unit/upstream-watch.test.mjs`: oversized detector inputs fail the affected target (exit 3, healthy targets kept, no state written); late object growth and oversized object store fail closed (exit 2, nothing written) |
+| Workflows | `zizmor`; a manual `workflow_dispatch` runs the read-only `inspect` job and renders to the step summary (`dry_run` is informational only; no `report` job is implemented yet) |
 | Canary | dispatch against `v4.5.0` (PASS), `quattro` (FAIL), a bogus ref (UNAVAILABLE), channel `rc` (UNAVAILABLE), a corrupted download (INFRA) |
 
 No test touches `~/.config/omarchy`, the running shell or hardware.
@@ -381,7 +494,9 @@ No test touches `~/.config/omarchy`, the running shell or hardware.
 2. **Capability inventory** (this document,
    `docs/upstream/capabilities.json`, validator).
 3. **Watcher, read-only:** the `inspect` job, D1–D9 as pure Node modules with
-   fixture tests, `dry_run` only.
+   fixture tests, aggregation, and dispatch-only read-only workflow
+   (`.github/upstream-watch/`, `.github/workflows/upstream-watch.yml`).
+   Implemented.
 4. **Reporting:**
    - the `report` job, state issue and upsert plan;
    - first, a maintainer creates the labels and the state issue;

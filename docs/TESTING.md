@@ -17,7 +17,7 @@ Stages executed in order:
 | Static lint | `tests/lint.sh` | `qmllint` against installed `qs` modules with `tests/lint-allowlist.txt` |
 | Upstream contract | `tests/contract/check-contract.sh` | Symbol-level check of every Omarchy/Quickshell/Hyprland API in `tests/contract/contract.tsv` |
 | Contract self-test | `tests/contract/self-test.sh` | Proves unrelated upstream edits pass and simulated symbol removals fail |
-| Pure JS unit tests | `node --test tests/unit/*.test.mjs` | Layout geometry, tiers, routes, hosting reconciliation, calendar/media, Control Center logic, theme contrast, upstream capability inventory (schema, states, references against the installed Omarchy tree) |
+| Pure JS unit tests | `node --test tests/unit/*.test.mjs` | Layout geometry, tiers, routes, hosting reconciliation, calendar/media, Control Center logic, theme contrast, upstream capability inventory (schema, states, references against the installed Omarchy tree), read-only upstream watcher and aggregation (detectors, ranges, state validation, report schema, correlation, safe rendering; synthetic fixtures only) |
 | Offscreen QML tests | `tests/qml/run.sh` | `qmltestrunner` offscreen component tests with service stubs; fails on unexpected stderr/warnings |
 | Sandbox script tests | `tests/scripts/isolated.sh tests/scripts/sandbox.test.sh` | Bubblewrap-isolated tests of `install.sh`, `activate.sh`, `rollback.sh`, `uninstall.sh`, `branch-test.sh`, TTY fallback, and atomic `shell.json` edits |
 | Privacy gate | `tests/privacy.sh` | Blocks current username, home path, hostname, email-shaped text, or key-shaped text |
