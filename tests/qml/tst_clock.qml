@@ -75,6 +75,7 @@ Item {
       if (sysClock) sysClock.date = new Date(2026, 9, 28, 9, 5, 0)
       mouseMove(harness, 10, 10)
       tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      wait(0)
       Commons.Style.reduceMotion = false
     }
 
@@ -213,8 +214,8 @@ Item {
       mouseMove(harness, 10, 10)
       compare(clock.timeText, "09:05", "leaving removes them")
       verify(!clock.secondsShown)
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
-      compare(clock.implicitWidth, idleWidth, "leaving restores idle width")
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      tryCompare(clock, "implicitWidth", idleWidth, 1000, "leaving restores idle width")
     }
 
     // The pointer left as the calendar closed: seconds and expanded width go
@@ -226,8 +227,8 @@ Item {
       compare(clock.timeText, "09:05:00")
       tryCompare(clock, "timeText", "09:05", clock.detailDelay + 300)
       verify(!clock.secondsShown, "never left showing seconds")
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
-      compare(clock.implicitWidth, idleWidth, "restores idle width after delay")
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      tryCompare(clock, "implicitWidth", idleWidth, 1000, "restores idle width after delay")
       wait(clock.detailDelay + 100)
       compare(clock.timeText, "09:05", "and no timer brings them back")
     }
@@ -239,8 +240,8 @@ Item {
       clock.close()
       compare(clock.timeText, "09:05")
       verify(!clock.secondsShown)
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
-      compare(clock.implicitWidth, idleWidth, "restores idle width")
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      tryCompare(clock, "implicitWidth", idleWidth, 1000, "restores idle width")
     }
 
     // Closing the calendar while hover detail is active keeps expanded width
@@ -256,8 +257,8 @@ Item {
       compare(clock.timeText, "09:05:00", "continued hover keeps seconds")
       compare(clock.implicitWidth, expandedWidth, "continued hover keeps expanded width")
       mouseMove(harness, 10, 10)
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
-      compare(clock.implicitWidth, idleWidth, "leaving restores idle width")
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      tryCompare(clock, "implicitWidth", idleWidth, 1000, "leaving restores idle width")
     }
 
     // Reopening after a click-close shows the seconds again.
