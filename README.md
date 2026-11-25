@@ -10,7 +10,7 @@ Floating Islands is a native `kind: "bar"` plugin written in QML and pure JavaSc
 
 ## Native Theme Adaptation
 
-Floating Islands binds directly to Omarchy's `Commons.Color` and `Commons.Style` tokens — with zero hard-coded colors, live switching across dark and light themes, and zero animation transitions when Omarchy reduced motion is enabled.
+Floating Islands binds its surfaces, accents, and transitions to Omarchy's `Commons.Color` and `Commons.Style` tokens — adapting live across dark and light Omarchy themes and routing animations through `Style.duration` so reduced-motion settings disable bar motion.
 
 ![Live dark and light theme adaptation: Catppuccin Mocha dark bar stacked above Catppuccin Latte light bar](docs/assets/bar-theme-comparison.webp)
 
@@ -21,9 +21,9 @@ Floating Islands binds directly to Omarchy's `Commons.Color` and `Commons.Style`
 | Native Calendar (`SUPER+CTRL+ALT+D`) | Native Hosted Widgets & Panels |
 | :---: | :---: |
 | ![Native Calendar popout centered beneath the active clock island in Tokyo Night](docs/assets/calendar-tokyo-night.webp) | ![Native Omarchy Power panel anchored cleanly beneath the right hosted status island](docs/assets/hosted-power-tokyo-night.webp) |
-| Centered `KeyboardPanel` with seconds readout while open, month navigation, and keyboard / `Escape` dismissal. | Hosts stock and user-configured right-section widgets via `PluginBarApi` (`SUPER+CTRL+1..9` and one-panel-at-a-time handover).* |
+| Centered `KeyboardPanel` with seconds readout while open, month navigation, and keyboard / `Escape` dismissal. | Hosts stock and user-configured right-section widgets via `PluginBarApi` (`SUPER+CTRL+1..9` and one-panel-at-a-time handover).<sup>1</sup> |
 
-*\*Note: The right status island displays whatever widgets are configured in the user's `bar.layout.right`. The screenshots above include two user-installed third-party status widgets alongside stock Omarchy widgets.*
+<sub><sup>1</sup> The right status island renders whatever widgets are configured in the user's <code>bar.layout.right</code>. The screenshots above include two user-installed third-party status widgets alongside stock Omarchy widgets.</sub>
 
 ### Media Island (Compact & Expanded / Pinned)
 
@@ -36,28 +36,70 @@ Hover to preview or click to pin inline transport controls (`prev`, `play/pause`
 - **Floating island layout:** Launcher + workspace indicators, elastic active-window title with application icon, centered clock, dynamic media island, and a dedicated hosted status island — with per-output responsive tiers (`full`, `compact`, `minimal`) computed from measured widths rather than fixed pixel breakpoints.
 - **Native Omarchy integration:**
   - Hosts stock and third-party right-section widgets via Omarchy's public `PluginBarApi` contract (`SUPER+CTRL+1..9` numbered shortcuts, `SUPER+CTRL+ALT+*` named shortcuts, and one-panel-at-a-time handover).
-  - Binds directly to `Commons.Color` and `Commons.Style` (live dark/light theme adaptation, reduced-motion compliance, and `bar.position: "bottom"` support).
-  - Uses the `omarchy-bar` layer-shell namespace and explicit `exclusiveZone` with an exact island-only input mask so the bar never steals focus or swallows clicks outside the islands.
+  - Binds to `Commons.Color` and `Commons.Style` (live dark/light theme adaptation, reduced-motion support, and `bar.position: "bottom"` support).
+  - Uses the `omarchy-bar` layer-shell namespace, explicit `exclusiveZone`, and an island-only input mask without taking keyboard focus on the bar surface so clicks outside the islands pass through to windows beneath.
 - **Native popouts & i18n:** Native Calendar panel (`SUPER+CTRL+ALT+D`), native Media island (hover preview + click pin), bar-drawn tooltips, and English (`en`), Spanish (`es`), and Japanese (`ja`) catalogs under `plugin/i18n/`.
 - **Experimental Control Center (opt-in, work in progress):** Disabled by default (`bar.islands.controlCenter: false`). Grouped keyboard-accessible dashboard (Night Light, Stay Awake, Do Not Disturb, Pipewire audio output, Wi-Fi/Bluetooth toggles, UPower power profiles, and event-driven built-in display brightness) under active community design in [docs/CONTROL_CENTER_RFC.md](docs/CONTROL_CENTER_RFC.md).
 
 ## Installation, Trial & Recovery
 
-Read [docs/RECOVERY.md](docs/RECOVERY.md) before activating the bar on a live desktop. Activation is always explicit, and a default trial never survives a logout or reboot.
+Read [docs/RECOVERY.md](docs/RECOVERY.md) before activating the bar on a live desktop. Installation does not edit `shell.json`, and activation is always explicit.
+
+### 1. Clone the repository
 
 ```bash
-tests/run-all.sh                            # Run the full isolated test suite (touches nothing outside /tmp)
-scripts/install.sh                          # Copy plugin into ~/.config/omarchy/plugins/floating-islands (does not activate)
-scripts/activate.sh --check                 # Pre-flight validation only (no config changes)
-scripts/activate.sh --confirm               # Session-only trial; auto-rolls back if health checks fail
-scripts/activate.sh --confirm --persistent  # Persistent daily activation (saves a pre-activation shell.json snapshot)
-scripts/rollback.sh                         # Restore the stock Omarchy bar (works from a TTY)
-scripts/branch-test.sh --arm 45             # Safely test a development build over an existing daily bar with auto-restore
+git clone https://github.com/adcuelloa/floating-islands.git
+cd floating-islands
 ```
 
-> **Switching bar plugin identities:** When switching from `omarchy.bar` (or legacy `islands.bar`) to `floating-islands`, Omarchy's hot reload can leave hosted right-island widgets inactive until the shell restarts. If status-island widgets do not appear or respond after activation, run `omarchy restart shell` once.
+### 2. Install and run activation preflight
 
-*Existing `bar.islands` settings and legacy `islands.bar` installations/recovery paths remain supported; see [docs/NAMING.md](docs/NAMING.md) and [docs/RECOVERY.md](docs/RECOVERY.md).*
+`scripts/install.sh` validates the plugin and copies it into `~/.config/omarchy/plugins/floating-islands` without changing the active bar. `scripts/activate.sh --check` verifies the upstream contract, QML lint, and running Hyprland/Omarchy session without touching configuration:
+
+```bash
+scripts/install.sh
+scripts/activate.sh --check
+```
+
+*(Optional for contributors or extra pre-install verification: `tests/run-all.sh` runs the full isolated test suite without touching anything outside `/tmp`.)*
+
+### 3. Try temporarily with an automatic watchdog (recommended first step)
+
+A default trial is scoped to the current Hyprland login session and rolls back automatically if initial IPC/geometry health checks fail. Adding `--watchdog 20` also sets a 20-minute wall-clock timer that runs `scripts/rollback.sh` to return the **stock Omarchy bar** (`omarchy.bar`) automatically:
+
+```bash
+scripts/activate.sh --confirm --watchdog 20
+```
+
+*Note: `--watchdog` always falls back to the stock Omarchy bar (`omarchy.bar`). If you are migrating from an existing supported legacy installation (`islands.bar`) and want to restore your exact prior configuration instead, use the pre-activation snapshot saved by `activate.sh` as documented in [docs/RECOVERY.md](docs/RECOVERY.md) (see also [docs/NAMING.md](docs/NAMING.md)).*
+
+### 4. Persistent activation (deliberate opt-in)
+
+Once you are ready to keep Floating Islands selected across logins, run persistent activation explicitly (it saves a timestamped pre-activation `shell.json` snapshot first):
+
+```bash
+scripts/activate.sh --confirm --persistent
+```
+
+### 5. Conditional shell restart after switching bar identities
+
+When switching from `omarchy.bar` (or legacy `islands.bar`) to `floating-islands`, Omarchy's hot reload can leave hosted right-island widgets inactive until the shell restarts. If hosted widgets do not appear or respond after activation, run once:
+
+```bash
+omarchy restart shell
+```
+
+### 6. Stock-bar rollback & TTY recovery
+
+To return to the stock Omarchy bar at any time (including from a TTY via `Ctrl+Alt+F3`, using only `bash`, `jq`, and coreutils):
+
+```bash
+scripts/rollback.sh
+```
+
+### Updating an already active installation
+
+To update an existing `floating-islands` installation, pull the new revision and re-run `scripts/install.sh` (it swaps the plugin directory atomically without modifying `shell.json`). For testing development builds over a daily bar with automatic snapshot restore (`scripts/branch-test.sh`), see [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Supported Compatibility Baseline & Alpha Limitations
 
@@ -148,6 +190,6 @@ Floating Islands is being built as a community-driven open-source project before
 
 ## Attribution & License
 
-Built for the [Omarchy](https://omarchy.org) shell (MIT), implementing its public bar and widget-hosting contracts. Documentation screenshots use Omarchy's bundled MIT-licensed minimal theme backgrounds (`omarchy.webp` and `1-color-fade.webp`) and standard Omarchy desktop UI.
+Built for the [Omarchy](https://omarchy.org) shell (MIT), implementing its public bar and widget-hosting contracts. Documentation screenshots show standard Omarchy `4.5.0-3` desktop UI and minimal backgrounds shipped in the MIT-licensed `omarchy` package (`omarchy.webp` and `1-color-fade.webp`).
 
-Current-tree license: **MIT** ([LICENSE](LICENSE), `Copyright (c) 2026 Floating Islands contributors`), with pinned Lucide (`1.79.0`) interface icon notices (ISC and applicable Feather MIT) in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Current-tree icon remediation does not retroactively resolve historical asset provenance in prior Git commits; see [docs/LICENSING.md](docs/LICENSING.md) for current-tree vs. historical provenance notes and the design-token review.
+Licensed under **MIT** ([LICENSE](LICENSE), `Copyright (c) 2026 Floating Islands contributors`), with pinned Lucide (`1.79.0`) interface icon notices (ISC and applicable Feather MIT) in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). See [docs/LICENSING.md](docs/LICENSING.md) for detailed provenance and design-token records.
