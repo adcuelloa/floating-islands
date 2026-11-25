@@ -99,14 +99,14 @@ test("progress is bounded and -1 when unknown", () => {
   assert.equal(M.progress(null), -1);
 });
 
-test("clock format splitSeconds, withSeconds and stableDigits keep tick measurements invariant", () => {
-  assert.deepEqual(plain(CF.splitSeconds("HH:mm")), { prefix: "HH:mm", seconds: ":ss", suffix: "", expandable: true });
-  assert.deepEqual(plain(CF.splitSeconds("h:mm AP")), { prefix: "h:mm", seconds: ":ss", suffix: " AP", expandable: true });
-  assert.deepEqual(plain(CF.splitSeconds("AP h:mm")), { prefix: "AP h:mm", seconds: ":ss", suffix: "", expandable: true });
-  assert.deepEqual(plain(CF.splitSeconds("HH:mm:ss")), { prefix: "HH:mm:ss", seconds: "", suffix: "", expandable: false });
-  assert.deepEqual(plain(CF.splitSeconds("h:mm:ss AP")), { prefix: "h:mm:ss AP", seconds: "", suffix: "", expandable: false });
-  assert.deepEqual(plain(CF.splitSeconds("HH")), { prefix: "HH", seconds: "", suffix: "", expandable: false });
-  assert.deepEqual(plain(CF.splitSeconds("")), { prefix: "", seconds: "", suffix: "", expandable: false });
+test("clock format splitTimeText, withSeconds and stableDigits keep tick measurements invariant", () => {
+  assert.deepEqual(plain(CF.splitTimeText("15:55", "15:55:42")), { prefix: "15:55", seconds: ":42", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("15:55", "15:55:55")), { prefix: "15:55", seconds: ":55", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("3:55 PM", "3:55:42 PM")), { prefix: "3:55", seconds: ":42", suffix: " PM", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("3:55 PM", "3:55:55 PM")), { prefix: "3:55", seconds: ":55", suffix: " PM", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("午後 3:55", "午後 3:55:42")), { prefix: "午後 3:55", seconds: ":42", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("15:55:42", "15:55:42")), { prefix: "15:55:42", seconds: "", suffix: "", expandable: false });
+  assert.deepEqual(plain(CF.splitTimeText("15", "15")), { prefix: "15", seconds: "", suffix: "", expandable: false });
   assert.equal(CF.withSeconds("HH:mm"), "HH:mm:ss");
   assert.equal(CF.withSeconds("h:mm AP"), "h:mm:ss AP");
   assert.equal(CF.withSeconds("HH:mm:ss"), "HH:mm:ss");

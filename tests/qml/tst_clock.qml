@@ -442,8 +442,10 @@ Item {
 
     function test_animatedAmPmFormatShiftsSuffixRightWithoutClipping() {
       verify(theme.widget > 0, "animations enabled")
+      var sysClock = findChild(clock, "systemClock")
+      if (sysClock) sysClock.date = new Date(2026, 9, 28, 15, 55, 42)
       clock.timeFormat = "h:mm AP"
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
 
       var prefix = findChild(clock, "clockTimePrefix")
       var secondsClip = findChild(clock, "clockTimeSecondsClip")
@@ -451,8 +453,8 @@ Item {
       var suffix = findChild(clock, "clockTimeSuffix")
       verify(prefix !== null && secondsClip !== null && secondsLabel !== null && suffix !== null)
 
-      compare(prefix.text, "9:05")
-      compare(suffix.text, " AM")
+      compare(prefix.text, "3:55")
+      compare(suffix.text, " PM")
       verify(suffix.visible)
       verify(prefix.implicitWidth <= prefix.width + 0.5, "12h prefix unclipped at idle")
       verify(suffix.implicitWidth <= suffix.width + 0.5, "AM/PM suffix unclipped at idle")
@@ -476,7 +478,7 @@ Item {
       verify(intermediates > 0, "observed intermediate 12h expansion frames")
       verify(prefix.mapToItem(harness, 0, 0).x < idlePrefixX, "12h prefix shifted left")
       verify(suffix.mapToItem(harness, 0, 0).x > idleSuffixX, "AM/PM suffix shifted right")
-      compare(secondsLabel.text, ":00")
+      compare(secondsLabel.text, ":42")
       compare(secondsClip.width, clock.secondsSlot)
     }
 

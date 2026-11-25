@@ -91,14 +91,14 @@ Island {
   // only then does the clock tick every second.
   readonly property int detailDelay: 400
   property bool detailed: false
-  readonly property var timeFormatParts: ClockFormat.splitSeconds(timeFormat)
   readonly property bool secondsShown: detailed || opened || timeFormat.indexOf("s") !== -1
   readonly property string detailFormat: ClockFormat.withSeconds(timeFormat)
   readonly property string detailTimeText: now.toLocaleString(locale, detailFormat)
   readonly property string compactTimeText: now.toLocaleString(locale, timeFormat)
-  readonly property string prefixTimeText: now.toLocaleString(locale, timeFormatParts.prefix)
-  readonly property string secondsTimeText: timeFormatParts.expandable ? now.toLocaleString(locale, timeFormatParts.seconds) : ""
-  readonly property string suffixTimeText: timeFormatParts.suffix !== "" ? now.toLocaleString(locale, timeFormatParts.suffix) : ""
+  readonly property var timeTextParts: ClockFormat.splitTimeText(compactTimeText, detailTimeText)
+  readonly property string prefixTimeText: timeTextParts.prefix
+  readonly property string secondsTimeText: timeTextParts.seconds
+  readonly property string suffixTimeText: timeTextParts.suffix
   readonly property string timeText: detailed || opened ? detailTimeText : compactTimeText
   readonly property string weekdayText: now.toLocaleString(locale, ClockFormat.WEEKDAY_FORMAT)
   // The day and month in the language's own order ("29 Oct", "10月29日").
@@ -108,13 +108,13 @@ Island {
   // seconds while hovered (after detailDelay), while the calendar is open, or
   // when timeFormat explicitly includes seconds.
   readonly property real prefixSlot: Math.ceil(prefixMetrics.advanceWidth)
-  readonly property real secondsSlot: timeFormatParts.expandable ? Math.ceil(secondsMetrics.advanceWidth) : 0
-  readonly property real suffixSlot: timeFormatParts.suffix !== "" ? Math.ceil(suffixMetrics.advanceWidth) : 0
+  readonly property real secondsSlot: timeTextParts.expandable ? Math.ceil(secondsMetrics.advanceWidth) : 0
+  readonly property real suffixSlot: suffixTimeText !== "" ? Math.ceil(suffixMetrics.advanceWidth) : 0
   readonly property real compactTimeSlot: prefixSlot + suffixSlot
   readonly property real detailTimeSlot: compactTimeSlot + secondsSlot
   readonly property real targetTimeSlot: secondsShown ? detailTimeSlot : compactTimeSlot
   property real timeSlot: targetTimeSlot
-  readonly property real secondsRevealWidth: timeFormatParts.expandable
+  readonly property real secondsRevealWidth: timeTextParts.expandable
     ? Math.max(0, Math.min(secondsSlot, timeSlot - compactTimeSlot))
     : 0
   readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
@@ -238,7 +238,7 @@ Island {
         anchors.verticalCenter: parent.verticalCenter
         width: root.secondsRevealWidth
         height: prefixLabel.implicitHeight
-        visible: root.timeFormatParts.expandable && width > 0
+        visible: root.timeTextParts.expandable && width > 0
         clip: true
 
         Text {
