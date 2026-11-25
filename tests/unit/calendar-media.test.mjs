@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { load } from "./qmljs.mjs";
 
 const C = load("logic/Calendar.js");
+const CF = load("logic/ClockFormat.js");
 const M = load("logic/Media.js");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const day = (year, month, d) => ({ year, month, day: d });
@@ -96,4 +97,22 @@ test("progress is bounded and -1 when unknown", () => {
   assert.equal(M.progress(player({ position: 10, length: 0 })), -1);
   assert.equal(M.progress(player({ position: 10, length: 100, positionSupported: false })), -1);
   assert.equal(M.progress(null), -1);
+});
+
+test("clock format splitTimeText, withSeconds and stableDigits keep tick measurements invariant", () => {
+  assert.deepEqual(plain(CF.splitTimeText("15:55", "15:55:42")), { prefix: "15:55", seconds: ":42", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("15:55", "15:55:55")), { prefix: "15:55", seconds: ":55", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("3:55 PM", "3:55:42 PM")), { prefix: "3:55", seconds: ":42", suffix: " PM", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("3:55 PM", "3:55:55 PM")), { prefix: "3:55", seconds: ":55", suffix: " PM", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("午後 3:55", "午後 3:55:42")), { prefix: "午後 3:55", seconds: ":42", suffix: "", expandable: true });
+  assert.deepEqual(plain(CF.splitTimeText("15:55:42", "15:55:42")), { prefix: "15:55:42", seconds: "", suffix: "", expandable: false });
+  assert.deepEqual(plain(CF.splitTimeText("15", "15")), { prefix: "15", seconds: "", suffix: "", expandable: false });
+  assert.equal(CF.withSeconds("HH:mm"), "HH:mm:ss");
+  assert.equal(CF.withSeconds("h:mm AP"), "h:mm:ss AP");
+  assert.equal(CF.withSeconds("HH:mm:ss"), "HH:mm:ss");
+  assert.equal(CF.withSeconds("HH"), "HH");
+  assert.equal(CF.stableDigits("09:05"), "88:88");
+  assert.equal(CF.stableDigits("09:05:00"), CF.stableDigits("09:05:59"));
+  assert.equal(CF.stableDigits("9:05:01 AM"), CF.stableDigits("9:05:49 AM"));
+  assert.equal(CF.stableDigits(""), "");
 });
