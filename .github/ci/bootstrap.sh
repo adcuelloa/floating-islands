@@ -50,7 +50,7 @@ else
   pacman_sync_flag="-Syu"
 fi
 ci_pacman_retry "$deadline" 240 -- "$pacman_sync_flag" --noconfirm --needed \
-  jq nodejs bubblewrap qt6-base qt6-declarative qt6-svg qt6-wayland \
+  jq nodejs npm bubblewrap qt6-base qt6-declarative qt6-svg qt6-wayland \
   noto-fonts ttf-liberation fontconfig
 
 files=()

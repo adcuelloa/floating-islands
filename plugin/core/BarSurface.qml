@@ -5,7 +5,7 @@ import Quickshell.Hyprland
 import QtQuick
 import qs.Ui
 import "Identity.js" as Identity
-import "../geometry/Layout.js" as Layout
+import "../geometry/Layout.mjs" as Layout
 import "../adapters"
 import "../widgets"
 import "../components"
@@ -79,7 +79,7 @@ PanelWindow {
   // ------------------------------------------------------------ tiers
   //
   // Measured, not looked up: each tier's fixed islands must fit beside the
-  // clock (geometry/Layout.js). The hosted island and the left island do not
+  // clock (geometry/Layout.mjs). The hosted island and the left island do not
   // change between tiers; the clock does, and the title takes what is left.
 
   readonly property real leftWidth: launcher.implicitWidth

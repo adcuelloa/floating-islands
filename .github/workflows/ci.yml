@@ -187,6 +187,14 @@ jobs:
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         timeout-minutes: 5
         run: runuser -u "$CI_USER" -- node --test --test-reporter=tap tests/unit/*.test.mjs 2>&1 | tee "$LOGS/node.log"
+      - name: install dev typecheck tooling
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: runuser -u "$CI_USER" -- npm ci --ignore-scripts 2>&1 | tee "$LOGS/npm-ci.log"
+      - name: typecheck (tsc --noEmit)
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- tests/typecheck.sh 2>&1 | tee "$LOGS/typecheck.log"
       - name: component tests (qmltestrunner, offscreen)
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         timeout-minutes: 10

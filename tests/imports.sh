@@ -65,6 +65,22 @@ while IFS= read -r file; do
   done < <(grep -E '^\s*\.?import\s' "$file")
 done < <(find "$plugin" -type f \( -name '*.qml' -o -name '*.js' \) | sort)
 
+# Native ECMAScript modules (.mjs) in the plugin may only import relative local
+# modules (no Node.js built-ins or bare npm package specifiers).
+while IFS= read -r file; do
+  dir=$(dirname "$file")
+  while IFS= read -r line; do
+    count=$((count + 1))
+    spec=$(sed -nE 's/.*\bfrom[[:space:]]+["'\'']([^"'\'']+)["'\''].*/\1/p; s/^[[:space:]]*import[[:space:]]+["'\'']([^"'\'']+)["'\''].*/\1/p' <<<"$line" | head -n 1)
+    [[ -n $spec ]] || continue
+    if [[ $spec == ./* || $spec == ../* ]]; then
+      [[ -e $dir/$spec ]] || report "${file#$plugin/}: $spec does not exist"
+    else
+      report "${file#$plugin/}: $spec is not a supported relative module import"
+    fi
+  done < <(grep -E '^\s*(import|export)\s+.*\bfrom\s+["'\'']|^\s*import\s+["'\'']' "$file")
+done < <(find "$plugin" -type f -name '*.mjs' | sort)
+
 if (( failures )); then
   echo "imports: $failures unresolved or unsupported"
   exit 1

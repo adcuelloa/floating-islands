@@ -18,6 +18,7 @@ Stages executed in order:
 | Upstream contract | `tests/contract/check-contract.sh` | Symbol-level check of every Omarchy/Quickshell/Hyprland API in `tests/contract/contract.tsv` |
 | Contract self-test | `tests/contract/self-test.sh` | Proves unrelated upstream edits pass and simulated symbol removals fail |
 | Pure JS unit tests | `node --test tests/unit/*.test.mjs` | Layout geometry, tiers, routes, hosting reconciliation, calendar/media, Control Center logic, theme contrast, upstream capability inventory (schema, states, references against the installed Omarchy tree), read-only upstream watcher and aggregation (detectors, ranges, state validation, report schema, correlation, safe rendering; synthetic fixtures only) |
+| Static type checks | `tests/typecheck.sh` | Strict TypeScript `checkJs` (`tsc --noEmit`) over Qt-executed `.mjs` modules (`tsconfig.qml.json`) and Node test consumers (`tsconfig.node.json`), plus isolated negative checks |
 | Offscreen QML tests | `tests/qml/run.sh` | `qmltestrunner` offscreen component tests with service stubs; fails on unexpected stderr/warnings |
 | Sandbox script tests | `tests/scripts/isolated.sh tests/scripts/sandbox.test.sh` | Bubblewrap-isolated tests of `install.sh`, `activate.sh`, `rollback.sh`, `uninstall.sh`, `branch-test.sh`, TTY fallback, and atomic `shell.json` edits |
 | Privacy gate | `tests/privacy.sh` | Blocks current username, home path, hostname, email-shaped text, or key-shaped text |
@@ -27,9 +28,13 @@ Stages executed in order:
 If you are editing pure JavaScript logic or documentation on a non-Arch machine:
 
 ```bash
+npm ci --ignore-scripts # one-time dev-only setup for tsc (never required to install or run the plugin)
 node --test tests/unit/*.test.mjs
+tests/typecheck.sh
 tests/privacy.sh
 ```
+
+Type checking uses development-only pinned `devDependencies` (`package.json` / `package-lock.json`) at the repository root and produces no build artifacts (`noEmit: true`). Installing or running the plugin under `omarchy-shell` never requires Node.js, npm, or TypeScript.
 
 ## Supervised Live Desktop Testing
 

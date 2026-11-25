@@ -1,7 +1,7 @@
 import QtQuick
 import QtTest
 import qs.Commons as Commons
-import "../../plugin/geometry/Layout.js" as Layout
+import "../../plugin/geometry/Layout.mjs" as Layout
 import "../../plugin/theme"
 import "../../plugin/widgets"
 

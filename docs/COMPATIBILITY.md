@@ -94,6 +94,34 @@ Its only findings are seven environment false positives, documented in
 - `Commons.Color` and `Commons.Style` hold their groups in `QtObject`
   properties whose members qmllint cannot see.
 
+## Native ECMAScript Modules (`.mjs`) and Strict Typing Pilot
+
+### Validated pilot results
+
+`plugin/geometry/Layout.mjs` and `plugin/logic/ClockFormat.mjs` were migrated from legacy `.pragma library` `.js` files to native ECMAScript modules (`.mjs`) with JSDoc type contracts and verified on the supported baseline (Omarchy `4.5.0-3`, Quickshell `0.3.2.r7.g2b4501a-1`, Qt `6.12.0`, CI Node.js `v26.13.0`):
+
+- **Qt/QML & Quickshell runtime:** QML `import "...mjs" as Alias`, explicit `export const`/`export function`, inter-module relative `import ... from "./...mjs"`, and single-evaluation shared-state module semantics (matching `.pragma library`) all work natively in `qmltestrunner` and `quickshell`.
+- **Static & packaging tools:** `qmllint`, `tests/imports.sh` (which also validates relative `.mjs` imports and blocks bare/Node specifiers inside `plugin/`), `omarchy-plugin-validate`, `scripts/install.sh`, and the bubblewrap sandbox suite accept `.mjs` files with zero runtime build step or extra end-user dependencies.
+- **Direct Node testing:** Node unit tests import the distributed `plugin/**/*.mjs` files directly without transforming them through `tests/unit/qmljs.mjs`.
+
+### Established development conventions
+
+- **Shared strict baseline (`tsconfig.base.json`):** `strict`, `noEmit`, `allowJs`, `checkJs`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noImplicitReturns`, `verbatimModuleSyntax`, `isolatedModules`, and `forceConsistentCasingInFileNames`.
+- **Qt-executed `.mjs` modules (`tsconfig.qml.json`):** `target: "ES2016"`, `lib: ["ES2016"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `types: []` — prevents Node.js or browser DOM globals and post-ES2016 standard library APIs from leaking into Qt-executed plugin code while requiring explicit `.mjs` extensions.
+- **Node-executed tests/tooling (`tsconfig.node.json`):** `target: "ES2024"`, `lib: ["ES2024"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `erasableSyntaxOnly: true`, `types: ["node"]`.
+- **Verification gate (`tests/typecheck.sh`):** Runs positive checks on both configs plus isolated negative checks in `/tmp` confirming invalid contracts, Node/DOM globals, and post-ES2016 stdlib methods are rejected. Executed in `tests/run-all.sh` and CI `qa` using pinned dev-only tooling (`npm ci --ignore-scripts`).
+
+### Future migration recommendations
+
+- Migrate remaining pure logic modules under `plugin/logic/`, `plugin/geometry/`, and `plugin/theme/` to `.mjs` with JSDoc contracts incrementally as they are modified, adding each migrated module to `tsconfig.qml.json` and switching its unit tests to direct ESM imports.
+- Keep `tests/unit/qmljs.mjs` only until all legacy `.js` modules are migrated, and retain legacy `.js` only where a module genuinely requires QML-specific `.import` / `.pragma` semantics.
+- Keep `scripts/*.sh` as self-contained Bash with no Node.js or TypeScript dependency.
+
+### Remaining compatibility limitations
+
+- **Qt 6.12 `QJSEngine` standard library ceiling:** Empirical probes on Quickshell `0.3.2` / Qt `6.12.0` confirm ES2016 baseline support (`Array.prototype.includes`, `Number.isFinite`), `Object.entries`, and cherry-picked syntax (`?.`, `??`), while ES2019–ES2022 library additions (`Array.prototype.at`, `Object.fromEntries`, `Object.hasOwn`, `String.prototype.replaceAll`, `structuredClone`) are absent. `tsconfig.qml.json` caps `lib` at `ES2016` accordingly, but `tsc --noEmit` is not a substitute for running offscreen QML/Quickshell tests.
+- **QML files themselves** remain checked by `qmllint` rather than TypeScript; `checkJs` covers `.mjs` logic and Node consumers only.
+
 ## Upstream capability inventory
 
 `docs/upstream/capabilities.json` maps every Omarchy manifest and platform

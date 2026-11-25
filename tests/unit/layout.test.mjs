@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load } from "./qmljs.mjs";
+import * as Layout from "../../plugin/geometry/Layout.mjs";
 
-const Layout = load("geometry/Layout.js");
 const m = Layout.metrics(1, "compact");
 
 // Widths estimated from the V2 prototype at a 12 px base font (see
@@ -16,6 +15,7 @@ const demands = {
 };
 
 // [label, logical width, expected tier, expected title cap]
+/** @type {readonly [string, number, Layout.Tier, number][]} */
 const outputs = [
   ["1920x1080 @1.0", 1920, "full", 480],
   ["1920x1080 @1.25", 1536, "full", 372],

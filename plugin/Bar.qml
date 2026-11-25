@@ -3,7 +3,7 @@ import QtQuick
 import Quickshell
 import qs.Commons as Commons
 import "core/Identity.js" as Identity
-import "geometry/Layout.js" as Layout
+import "geometry/Layout.mjs" as Layout
 import "logic/Settings.js" as Settings
 import "logic/Trial.js" as Trial
 import "logic/Calendar.js" as Calendar
@@ -120,7 +120,7 @@ Item {
   readonly property int barSize: Layout.exclusiveZone(theme.m)
   // What panels and toasts are told the bar measures. They add Style.gapsOut,
   // which follows Hyprland's gaps, so this keeps them panelGap from the islands
-  // with gaps on or off (geometry/Layout.js panelBarSize).
+  // with gaps on or off (geometry/Layout.mjs panelBarSize).
   readonly property int panelBarSize: Layout.panelBarSize(theme.m, Commons.Style.gapsOut)
   readonly property string fontFamily: Commons.Style.font.family
   readonly property var screenBarSizes: {
