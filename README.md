@@ -91,9 +91,10 @@ omarchy restart shell
 
 ### 6. Stock-bar rollback & TTY recovery
 
-To return to the stock Omarchy bar at any time (including from a TTY via `Ctrl+Alt+F3`, using only `bash`, `jq`, and coreutils):
+To return to the stock Omarchy bar at any time (including from a TTY via `Ctrl+Alt+F3`, using only `bash`, `jq`, and coreutils), change into your repository clone (or invoke the script by its full path):
 
 ```bash
+cd /path/to/floating-islands
 scripts/rollback.sh
 ```
 
