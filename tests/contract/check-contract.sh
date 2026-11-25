@@ -8,7 +8,7 @@
 # checking newer upstream revisions where an opt-in break is a finding, not a
 # blocker. The supported baseline is always checked without --advisory.
 #
-# Usage: tests/contract/check-contract.sh [--quiet] [--advisory]
+# Usage: tests/contract/check-contract.sh [--quiet] [--advisory] [--porcelain]
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -16,11 +16,13 @@ OMARCHY=${OMARCHY_PATH:-/usr/share/omarchy}
 QS=${QUICKSHELL_QML_DIR:-/usr/lib/qt6/qml/Quickshell}
 quiet=0
 advisory=0
+porcelain=0
 for arg in "$@"; do
   case $arg in
     --quiet) quiet=1 ;;
     --advisory) advisory=1 ;;
-    *) echo "usage: check-contract.sh [--quiet] [--advisory]" >&2; exit 2 ;;
+    --porcelain) porcelain=1 ;;
+    *) echo "usage: check-contract.sh [--quiet] [--advisory] [--porcelain]" >&2; exit 2 ;;
   esac
 done
 
@@ -52,11 +54,21 @@ note_version() {
 note_version omarchy "$PINNED_OMARCHY"
 note_version quickshell "$PINNED_QUICKSHELL"
 
+lineno=0
 while IFS=$'\t' read -r area file mode pattern reason; do
+  lineno=$((lineno + 1))
   [[ -z ${area// } || $area == \#* ]] && continue
   conditional=0
   [[ $mode == *\? ]] && conditional=1 && mode=${mode%\?}
-  [[ $mode == F || $mode == E ]] || { echo "FAIL [$area] bad mode '$mode' — $reason"; fail=$((fail + 1)); continue; }
+  if [[ $mode != F && $mode != E ]]; then
+    fail=$((fail + 1))
+    if (( porcelain )); then
+      printf 'row\t%d\tFAIL\t%d\t%s\t%s\n' "$lineno" "$conditional" "$area" "$reason"
+    else
+      echo "FAIL [$area] bad mode '$mode' — $reason"
+    fi
+    continue
+  fi
   path=${file//\$OMARCHY/$OMARCHY}
   path=${path//\$QS/$QS}
   if [[ ! -f $path ]]; then
@@ -68,15 +80,27 @@ while IFS=$'\t' read -r area file mode pattern reason; do
   fi
   if (( found == 0 )); then
     pass=$((pass + 1))
-    (( quiet )) || echo "ok   [$area] $reason"
+    if (( porcelain )); then
+      printf 'row\t%d\tok\t%d\t%s\t%s\n' "$lineno" "$conditional" "$area" "$reason"
+    elif (( ! quiet )); then
+      echo "ok   [$area] $reason"
+    fi
   elif (( conditional && advisory )); then
     warn=$((warn + 1))
-    echo "WARN [$area] (conditional) $reason"
-    echo "     $detail"
+    if (( porcelain )); then
+      printf 'row\t%d\tWARN\t%d\t%s\t%s\n' "$lineno" "$conditional" "$area" "$reason"
+    else
+      echo "WARN [$area] (conditional) $reason"
+      echo "     $detail"
+    fi
   else
     fail=$((fail + 1))
-    echo "FAIL [$area] $reason"
-    echo "     $detail"
+    if (( porcelain )); then
+      printf 'row\t%d\tFAIL\t%d\t%s\t%s\n' "$lineno" "$conditional" "$area" "$reason"
+    else
+      echo "FAIL [$area] $reason"
+      echo "     $detail"
+    fi
   fi
 done <"$here/contract.tsv"
 

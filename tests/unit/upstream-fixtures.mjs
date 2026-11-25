@@ -33,8 +33,18 @@ export const rows = contractRows([
   "commons\t$OMARCHY/shell/Ui/qmldir\tE\t^ScreenMoveRemap [0-9.]+ ScreenMoveRemap.qml\toutput-move guard",
   "theme\t$QS/quickshell-core.qmltypes\tF\tname: \"x\"\tpinned runtime row is ignored",
 ].join("\n"));
-export const contractOut = (fails = [], warns = []) => parseContract([...rows.keys()].map((k) =>
-  `${fails.includes(k) ? "FAIL" : warns.includes(k) ? "WARN" : "ok  "} ${warns.includes(k) ? k.replace("] ", "] (conditional) ") : k}`).join("\n"));
+export const contractPorcelain = (fails = [], warns = [], targetRows = rows) => {
+  let pass = 0, fail = 0, warn = 0;
+  const lines = [];
+  for (const [k, r] of targetRows) {
+    const status = fails.includes(k) ? (fail++, "FAIL") : warns.includes(k) ? (warn++, "WARN") : (pass++, "ok");
+    lines.push(`row\t${r.lineno}\t${status}\t${r.conditional ? 1 : 0}\t${r.area}\t${r.reason}`);
+  }
+  lines.push(`contract: ${pass} passed, ${fail} failed, ${warn} conditional warnings`);
+  return lines.join("\n");
+};
+export const contractOut = (fails = [], warns = [], targetRows = rows) =>
+  parseContract(contractPorcelain(fails, warns, targetRows), targetRows);
 
 export const api = (...lines) => ["Item {", ...lines.map((l) => `    ${l}`), "}"].join("\n");
 export const baseFiles = () => new Map([

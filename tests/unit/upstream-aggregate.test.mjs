@@ -35,14 +35,17 @@ test("a removed qmldir type, its file and the contract row correlate; several ca
   assert.equal(brk.primary, null, "qmldir maps to two capabilities: no primary is invented");
 });
 
-test("independent failures in one file stay separate items; uncorrelated removals are modifications", () => {
+test("independent failures in one file stay separate items; conditional stays modification, uncorrelated removals are modifications", () => {
   const fs = run(edit((m) => m.set("shell/Ui/PluginBarApi.qml", api("property var _gone: null", "function show(a, b) {}"))),
     { contract: { base: contractOut(), head: contractOut([hide], [optIn]) } });
   const its = items(fs);
   const brk = its.filter((i) => i.category === "breaking");
-  assert.equal(brk.length, 2);
-  assert.notEqual(brk[0].topic, brk[1].topic);
-  assert.deepEqual(brk.map((i) => i.note).sort(), [null, "Affects an opt-in feature only (conditional contract row)."].sort());
+  const optMod = its.filter((i) => i.category === "modification" && i.change === "regression");
+  assert.equal(brk.length, 1, "only the required contract regression is breaking");
+  assert.equal(optMod.length, 1, "conditional contract regression stays a modification, not breaking");
+  assert.notEqual(brk[0].topic, optMod[0].topic);
+  assert.equal(brk[0].note, null);
+  assert.equal(optMod[0].note, "Affects an opt-in feature only (conditional contract row).");
   const gone = edit((m) => m.set("shell/Ui/PluginBarApi.qml", api("property var _hide: null", "property var _optIn: null", "function show(a, b) {}")));
   const mod = items(run(gone)).find((i) => i.subsystem === "shell/Ui/PluginBarApi.qml");
   assert.equal(mod.category, "modification");
@@ -101,4 +104,47 @@ test("attribution is qualified: the first commit touching a file is never called
   const none = run(head, { intro: () => null });
   assert.ok(none.every((f) => f.attribution.basis === "unavailable" && f.attribution.sha === null));
   assert.match(renderSummary(report(none), items(none)), /attribution unavailable/);
+});
+
+test("F4: advisory-only conditional regression + D2 removal stays modification; required regression stays breaking", () => {
+  const onlyOptIn = run(edit((m) => m.set("shell/Ui/PluginBarApi.qml", api("property var _hide: null", "property var _gone: null", "function show(a, b) {}"))),
+    { contract: { base: contractOut(), head: contractOut([], [optIn]) } });
+  const its = items(onlyOptIn);
+  assert.equal(its.filter((i) => i.category === "breaking").length, 0, "advisory-only mismatch must never be breaking");
+  const mod = its.find((i) => i.category === "modification" && i.change === "regression");
+  assert.ok(mod);
+  assert.equal(mod.note, "Affects an opt-in feature only (conditional contract row).");
+  assert.deepEqual(mod.members.map((f) => `${f.detector} ${f.kind}`), ["D1 regression", "D2 api-removed", "D7 path-touched"]);
+  assert.ok(mod.members.every((f) => f.severity !== "breaking"));
+});
+
+test("F5: multiple independent flat widget manifest additions each belong to exactly one item while directory plugins still group", () => {
+  const fs = run(edit((m) => {
+    m.set("shell/plugins/bar/widgets/alpha.manifest.json", JSON.stringify({ id: "omarchy.alpha", kind: "widget" }));
+    m.set("shell/plugins/bar/widgets/beta.manifest.json", JSON.stringify({ id: "omarchy.beta", kind: "widget" }));
+    m.set("shell/plugins/bar/widgets/gamma.manifest.json", JSON.stringify({ id: "omarchy.gamma", kind: "widget" }));
+    m.set("shell/plugins/local-models/manifest.json", JSON.stringify({ id: "omarchy.local-models", kind: "service" }));
+    m.set("shell/plugins/local-models/Main.qml", "Item {}");
+  }));
+  const its = items(fs);
+  const nc = its.filter((i) => i.category === "new-capability");
+  assert.deepEqual(nc.map((i) => i.anchor).sort(), [
+    "manifest omarchy.alpha",
+    "manifest omarchy.beta",
+    "manifest omarchy.gamma",
+    "manifest omarchy.local-models",
+  ]);
+  // Every raw finding appears in exactly one aggregate item (exact identity count, not just Set size).
+  const flat = its.flatMap((i) => i.members);
+  assert.equal(flat.length, fs.length);
+  const seen = new Map();
+  for (const f of flat) {
+    const k = `${f.ref}\u0000${f.fingerprint}`;
+    seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  assert.equal(seen.size, fs.length);
+  assert.ok([...seen.values()].every((n) => n === 1), "no raw finding may appear in more than one item");
+  // Directory plugin still keeps its own manifest + related directory evidence grouped.
+  const lm = nc.find((i) => i.anchor === "manifest omarchy.local-models");
+  assert.equal(lm.subsystem, "shell/plugins/local-models/");
 });

@@ -98,7 +98,8 @@ each widget stay open to community feedback.
 Workflow `upstream-watch.yml`:
 
 - trigger today: `workflow_dispatch` only, with `dry_run` (default `true`,
-  read-only preview);
+  informational only; both values remain strictly read-only until reporting is
+  implemented);
 - later (step 4): `schedule` (`17 */12 * * *`, minute offset to avoid the
   top-of-hour queue), `mode` (`incremental` or `reconcile`), `reset_state`
   for bootstrap, and the `report` job.
@@ -129,8 +130,11 @@ node .github/upstream-watch/inspect.mjs --work <dir> \
   user or system configuration (no credential helpers, filters or hooks), with
   `core.symlinks=false` and `protocol.ext.allow=never`. Symlinks, files over
   1 MB and paths outside the path pattern are skipped.
-- D1 runs `tests/contract/check-contract.sh --advisory` against each checked
-  out tree. That script only greps. Nothing from upstream is executed.
+- D1 runs `tests/contract/check-contract.sh --advisory --porcelain` against
+  each checked out tree and reconciles every row by line number, metadata and
+  summary totals. Each row carries a stable identity (`[area#hash] reason`);
+  missing, duplicated or incomplete contract results fail closed. That script
+  only greps. Nothing from upstream is executed.
 - The state is a local JSON file with the schema of §3.2 (`refs`,
   `first_seen`, `tags_seen`, `release_branches_seen`, `reset`). Without a
   state the range is cumulative from the inventory's `revisions.baseline`.
@@ -157,9 +161,10 @@ Differences from the design below, kept on purpose:
   `multi`. Unmapped findings are scoped `contract:<area>` or
   `unmapped:<id or path>`. A manifest id that does not match
   `[A-Za-z0-9._-]` is replaced by `manifest-<hash>`.
-- **D2 severity.** An API removal is `breaking` only when a contract row on
-  the same file names that symbol. The inventory's prose API
-  (`PluginBarApi._* callbacks`) is too coarse.
+- **D2 severity.** An API removal is `breaking` only when a **required**
+  (non-conditional) contract row on the same file names that symbol. The
+  inventory's prose API (`PluginBarApi._* callbacks`) is too coarse, and
+  conditional (`F?`/`E?`) rows stay advisory (`review`).
 - **Certainty.** `confirmed` (D1, D3, D9), `textual` (a source fact whose
   impact is unknown) or `uncertain` (D8, and everything else in a
   `history-rewrite` range). Every detector is static. `confirmed` means a
@@ -167,10 +172,13 @@ Differences from the design below, kept on purpose:
   rendered text says so: "static check failed (runtime impact not
   demonstrated)". Only the canary (§4, not implemented) could demonstrate a
   runtime incompatibility.
-- **Resource bounds.** The clone's object store must stay under 1 GiB and
-  each analysed revision under 5000 files and 64 MiB (files over 1 MB are
-  skipped). Exceeding the object bound stops the run with nothing written;
-  exceeding a tree bound fails that target, so no state advances.
+- **Resource bounds.** The clone's object store must stay under 1 GiB
+  (checked after fetch, fallback baseline fetch, blob hydration and before
+  publication) and each analysed revision under 5000 files, 64 MiB total and
+  1 MiB per detector input. Exceeding the object bound stops the run with
+  nothing written (exit `2`); exceeding a tree or detector-input bound fails
+  the affected target (exit `3`), preserves healthy targets' findings and never
+  advances state.
 - **D8 scope.** Watch tokens are matched as whole words, only in added lines
   of the blocker's own capability files and the host API files.
 
@@ -185,10 +193,13 @@ evidence. Fixed rules, applied in order:
    and removed paths are linked when they describe the same thing (contract
    row + named API removal or removed file; removed `qmldir` type + removed
    file; removed manifest + removed file). Each connected group with a
-   contract regression or a breaking removal is one `breaking` item.
-2. **New capability.** A manifest the inventory does not ship (or ships only
-   as `detected`), plus every other finding in the same plugin directory. The
-   item says it is a finding, not an approved feature.
+   `breaking` member is one `breaking` item; conditional-only (`WARN` /
+   `review`) contract regressions stay `modification` with an opt-in note.
+2. **New capability.** Independent manifest leaders are reserved first so each
+   raw finding belongs to exactly one item. A `manifest.json` plugin groups
+   other findings in its own directory; flat `*.manifest.json` widget manifests
+   remain independent items. The item says it is a finding, not an approved
+   feature.
 3. **Shortcuts.** Binding files are linked when a combination is removed from
    one and added to another. Each linked set is one item (`migration` when it
    spans files) and lists every binding. It is a `modification` when it maps
@@ -470,8 +481,8 @@ maintainer. The workflow never creates labels or changes settings.
 | State | valid, missing, corrupt, foreign author, two state issues, changed `updated_at`, non-ancestor cursor |
 | Rendering | backtick runs, `@handles`, `#123`, `<!--` markers, bidi characters, oversized text, odd paths |
 | Artifact | size and count caps, unknown keys, bad SHA, bad label |
-| Resource bounds | `tests/unit/upstream-watch.test.mjs`: oversized tree and object store fail closed; nothing written |
-| Workflows | `zizmor`; a `dry_run` dispatch renders to the step summary with the `report` job skipped |
+| Resource bounds | `tests/unit/upstream-watch.test.mjs`: oversized detector inputs fail the affected target (exit 3, healthy targets kept, no state written); late object growth and oversized object store fail closed (exit 2, nothing written) |
+| Workflows | `zizmor`; a manual `workflow_dispatch` runs the read-only `inspect` job and renders to the step summary (`dry_run` is informational only; no `report` job is implemented yet) |
 | Canary | dispatch against `v4.5.0` (PASS), `quattro` (FAIL), a bogus ref (UNAVAILABLE), channel `rc` (UNAVAILABLE), a corrupted download (INFRA) |
 
 No test touches `~/.config/omarchy`, the running shell or hardware.

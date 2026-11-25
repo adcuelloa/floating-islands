@@ -26,6 +26,11 @@ export function clean(text, max = LIMITS.text) {
   return cps.length > max ? cps.slice(0, max - 1).join("") + "…" : s;
 }
 
+/** One line of untrusted diagnostic/stderr text: also neutralizes GitHub Actions workflow commands (`::`). */
+export function safeErrorText(text, max = 160) {
+  return clean(text, max).replace(/::/g, ": :");
+}
+
 const longestRun = (s) => Math.max(0, ...(s.match(/`+/g) || []).map((r) => r.length));
 
 /** Inline code span that the text cannot close: mentions, links and #refs stay inert. */
@@ -126,24 +131,71 @@ export function manifests(files) {
   return out;
 }
 
-/** Contract output (`check-contract.sh [--advisory]`, not --quiet) -> Map("[area] reason" -> ok|FAIL|WARN). */
-export function parseContract(output) {
-  const out = new Map();
+/** Stable unambiguous identity for a contract.tsv row. */
+export function contractRowKey(area, file, mode, pattern, reason) {
+  const id = hash16([area, file, mode.replace("?", ""), pattern].join("\u0000")).slice(0, 8);
+  return `[${area}#${id}] ${reason}`;
+}
+
+/**
+ * Contract output (`check-contract.sh --advisory --porcelain`) reconciled against `rows`.
+ * Rejects missing, duplicated, mismatched or incomplete results; never defaults to "ok".
+ */
+export function parseContract(output, rows) {
+  if (typeof output !== "string") throw new Error("contract output: not a string");
+  if (!(rows instanceof Map) || rows.size === 0) throw new Error("contract rows: empty");
+  const seenLines = new Map();
+  const counts = { ok: 0, FAIL: 0, WARN: 0 };
+  let summary = null;
   for (const l of output.split("\n")) {
-    const m = /^(ok  |FAIL|WARN) (\[[\w-]+\]) (?:\(conditional\) )?(.+)$/.exec(l);
-    if (m) out.set(`${m[2]} ${m[3]}`, m[1].trim());
+    if (l.startsWith("row\t")) {
+      const parts = l.split("\t");
+      if (parts.length !== 6) throw new Error(`contract output: malformed row line`);
+      const [, linenoStr, status, condStr, area, reason] = parts;
+      if (!/^[1-9]\d*$/.test(linenoStr)) throw new Error(`contract output: invalid line number ${linenoStr}`);
+      if (!["ok", "FAIL", "WARN"].includes(status)) throw new Error(`contract output: invalid status ${status}`);
+      if (condStr !== "0" && condStr !== "1") throw new Error(`contract output: invalid conditional flag ${condStr}`);
+      const lineno = Number(linenoStr);
+      if (seenLines.has(lineno)) throw new Error(`contract output: duplicate result for line ${lineno}`);
+      seenLines.set(lineno, { status, conditional: condStr === "1", area, reason });
+      counts[status]++;
+      continue;
+    }
+    const sm = /^contract: (\d+) passed, (\d+) failed(?:, (\d+) conditional warnings)?$/.exec(l);
+    if (sm) {
+      if (summary) throw new Error("contract output: duplicate summary line");
+      summary = { pass: Number(sm[1]), fail: Number(sm[2]), warn: sm[3] == null ? 0 : Number(sm[3]) };
+    }
+  }
+  if (!summary) throw new Error("contract output: incomplete (missing summary)");
+  if (counts.ok !== summary.pass || counts.FAIL !== summary.fail || counts.WARN !== summary.warn)
+    throw new Error("contract output: incomplete (row counts disagree with summary)");
+  const out = new Map();
+  for (const [key, row] of rows) {
+    const res = seenLines.get(row.lineno);
+    if (!res) throw new Error(`contract output: missing result for line ${row.lineno} (${key})`);
+    if (res.area !== row.area || res.reason !== row.reason || res.conditional !== row.conditional)
+      throw new Error(`contract output: mismatched metadata at line ${row.lineno} (${key})`);
+    out.set(key, res.status);
   }
   return out;
 }
 
-/** contract.tsv rows on the upstream tree -> Map(key -> { area, path, mode, pattern }). */
+/** contract.tsv rows on the upstream tree -> Map(key -> { key, lineno, area, file, path, mode, pattern, reason, conditional }). */
 export function contractRows(tsv) {
   const out = new Map();
-  for (const l of tsv.split("\n")) {
+  const lines = tsv.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
     if (!l.trim() || l.startsWith("#")) continue;
-    const [area, file, mode, pattern, reason] = l.split("\t");
+    const lineno = i + 1;
+    const parts = l.split("\t");
+    if (parts.length !== 5) throw new Error(`contract.tsv line ${lineno}: expected 5 tab-separated fields`);
+    const [area, file, mode, pattern, reason] = parts;
     if (!file.startsWith("$OMARCHY/")) continue; // Quickshell rows use the pinned runtime, never upstream
-    out.set(`[${area}] ${reason}`, { area, path: file.slice(9), mode: mode.replace("?", ""), pattern, conditional: mode.endsWith("?") });
+    const key = contractRowKey(area, file, mode, pattern, reason);
+    if (out.has(key)) throw new Error(`contract.tsv line ${lineno}: duplicate contract row identity ${key}`);
+    out.set(key, { key, lineno, area, file, path: file.slice(9), mode: mode.replace("?", ""), pattern, reason, conditional: mode.endsWith("?") });
   }
   return out;
 }
@@ -197,6 +249,22 @@ const API_FILE = /^shell\/(shell\.qml|services\/Plugin\w*\.qml|Ui\/(PluginBarApi
 const CLI_FILE = /^bin\/omarchy-(bar|shell[\w-]*|plugin-[\w-]+|toggle-bar)$/;
 const BIND_FILE = /^default\/hypr\/.*\.lua$/;
 const CONFIG_FILE = "config/omarchy/shell.json";
+const MANIFEST_FILE = /^shell\/.*manifest\.json$/;
+const PLUGIN_SUBDIR = /^shell\/plugins\/[^/]+\/[^/]+\//;
+
+/** True when any detector (D1-D8) reads this upstream path. */
+export function isDetectorInput(path, { inventory, rows }) {
+  if (API_FILE.test(path) || CLI_FILE.test(path) || BIND_FILE.test(path) || path === CONFIG_FILE || MANIFEST_FILE.test(path))
+    return true;
+  if (rows && [...rows.values()].some((r) => r.path === path)) return true;
+  if (inventory) {
+    const idx = indexInventory(inventory);
+    if (idx.byPath.has(path)) return true;
+    if (PLUGIN_SUBDIR.test(path)) return true;
+    if (path.startsWith("shell/") && capsForPath(idx, path).length > 0) return true;
+  }
+  return false;
+}
 
 function diffMaps(a, b) {
   const out = [];
@@ -219,17 +287,25 @@ export function analyze({ inventory, target, files, contract, rows, introducing,
   const raw = [];
   const uncertain = target.status === "history-rewrite";
   const emit = (f) => raw.push(f);
-  const ev = (side, path, line, text) => ({ sha: side === "base" ? target.base : target.head, path, line: line ?? null, text: text == null ? null : clean(text) });
+  const ev = (side, path, line, text) => {
+    const cleaned = text == null ? null : clean(text);
+    return { sha: side === "base" ? target.base : target.head, path, line: line ?? null, text: cleaned ? cleaned : null };
+  };
   const both = (path, d) => [
     ...(d.before ? [ev("base", path, d.before.line, d.before.sig)] : []),
     ...(d.after ? [ev("head", path, d.after.line, d.after.sig)] : []),
   ];
 
   // D1 contract
-  if (contract?.base && contract?.head) {
+  if (contract?.base || contract?.head) {
+    if (!contract.base || !contract.head) throw new Error("D1: incomplete contract results");
     for (const [key, row] of rows) {
-      const was = contract.base.get(key) ?? "ok", now = contract.head.get(key) ?? "ok";
-      if ((was === "ok") === (now === "ok")) continue;
+      if (!contract.base.has(key) || !contract.head.has(key))
+        throw new Error(`D1: missing contract result for ${key}`);
+      const was = contract.base.get(key), now = contract.head.get(key);
+      if (!["ok", "FAIL", "WARN"].includes(was) || !["ok", "FAIL", "WARN"].includes(now))
+        throw new Error(`D1: invalid contract status for ${key}`);
+      if (was === now) continue;
       const byArea = idx.byArea.get(row.area) || [];
       const narrowed = byArea.filter((c) => capsForPath(idx, row.path).includes(c));
       const caps = [...new Set(narrowed.length ? narrowed : byArea)].sort();
@@ -246,9 +322,9 @@ export function analyze({ inventory, target, files, contract, rows, introducing,
   }
 
   // D2 API surface
-  // Breaking only when a contract row on the same file names the symbol: the
-  // inventory's prose api (e.g. "PluginBarApi._* callbacks") is too coarse.
-  const named = (path, name) => [...rows.values()].some((r) => r.path === path && rowTokens(r).includes(name));
+  // Breaking only when a required (non-conditional) contract row on the same file names the symbol:
+  // the inventory's prose api (e.g. "PluginBarApi._* callbacks") is too coarse, and conditional rows are advisory.
+  const namedRequired = (path, name) => [...rows.values()].some((r) => !r.conditional && r.path === path && rowTokens(r).includes(name));
   for (const path of [...new Set([...files.base.keys(), ...files.head.keys()])].filter((p) => API_FILE.test(p)).sort()) {
     const a = files.base.has(path) ? apiSymbols(path, files.base.get(path)) : new Map();
     const b = files.head.has(path) ? apiSymbols(path, files.head.get(path)) : new Map();
@@ -257,7 +333,7 @@ export function analyze({ inventory, target, files, contract, rows, introducing,
       const name = d.subject.split(" ")[1];
       emit({
         detector: "D2", kind, caps: capsForPath(idx, path), fallback: `unmapped:${path}`,
-        severity: kind === "api-removed" && named(path, name) ? "breaking" : "review",
+        severity: kind === "api-removed" && namedRequired(path, name) ? "breaking" : "review",
         certainty: "textual", subject: `${path} ${d.subject}`, path, symbol: name,
         before: d.before?.sig ?? null, after: d.after?.sig ?? null, evidence: both(path, d),
       });
@@ -291,7 +367,10 @@ export function analyze({ inventory, target, files, contract, rows, introducing,
       const a = files.base.get(path), b = files.head.get(path);
       const x = a == null ? null : cliHeader(a), y = b == null ? null : cliHeader(b);
       if (x === y) continue;
-      const d = { before: x == null ? null : { sig: x, line: 1 }, after: y == null ? null : { sig: y, line: 1 } };
+      const d = {
+        before: x == null ? null : { sig: x || null, line: x ? 1 : null },
+        after: y == null ? null : { sig: y || null, line: y ? 1 : null },
+      };
       emit({ detector: "D4", kind: kindFor("cli", d), caps: capsForPath(idx, path), fallback: `unmapped:${path}`,
         severity: "review", certainty: "textual", subject: `cli ${path.slice(4)}`, path, symbol: path.slice(4), before: x, after: y, evidence: both(path, d) });
     } else if (BIND_FILE.test(path)) {
@@ -548,20 +627,22 @@ export function validateReport(obj, { bytes, capabilityIds }) {
     str(t.base, `targets[${i}].base`, SHA, 40, true); str(t.head, `targets[${i}].head`, SHA, 40, true); str(t.error, `targets[${i}].error`, null, LIMITS.text, true);
   });
   if (!Array.isArray(obj.findings) || obj.findings.length > LIMITS.findings) fail("findings: count");
-  const fps = new Set();
+  const seenPerRef = new Set();
   obj.findings.forEach((f, i) => {
     const w = `findings[${i}]`;
     exactKeys(f, ["fingerprint", "scope", "primary", "capabilities", "detector", "kind", "severity", "certainty", "ref", "subject", "path", "symbol", "attribution", "evidence"], w, fail);
     str(f.fingerprint, `${w}.fingerprint`, FP);
-    if (fps.has(f.fingerprint)) fail(`${w}: duplicate fingerprint`);
-    fps.add(f.fingerprint);
+    str(f.ref, `${w}.ref`, REF);
+    const refFp = `${f.ref}\u0000${f.fingerprint}`;
+    if (seenPerRef.has(refFp)) fail(`${w}: duplicate fingerprint for ref ${f.ref}`);
+    seenPerRef.add(refFp);
     str(f.scope, `${w}.scope`, SCOPE);
     if (/^[a-z][a-z0-9-]*\./.test(f.scope) && !capabilityIds.has(f.scope)) fail(`${w}.scope: not an inventory id`);
     if (f.primary !== null && (!capabilityIds.has(f.primary) || f.primary !== f.scope)) fail(`${w}.primary`);
     if (!Array.isArray(f.capabilities) || f.capabilities.length > LIMITS.list || !f.capabilities.every((c) => capabilityIds.has(c))) fail(`${w}.capabilities`);
     oneOf(f.detector, `${w}.detector`, ENUMS.detector); str(f.kind, `${w}.kind`, KIND);
     oneOf(f.severity, `${w}.severity`, ENUMS.severity); oneOf(f.certainty, `${w}.certainty`, ENUMS.certainty);
-    str(f.ref, `${w}.ref`, REF); str(f.subject, `${w}.subject`);
+    str(f.subject, `${w}.subject`);
     str(f.path, `${w}.path`, PATH, 300, true); str(f.symbol, `${w}.symbol`, null, LIMITS.text, true);
     exactKeys(f.attribution, ["sha", "basis"], `${w}.attribution`, fail);
     str(f.attribution.sha, `${w}.attribution.sha`, SHA, 40, true); oneOf(f.attribution.basis, `${w}.attribution.basis`, BASIS);

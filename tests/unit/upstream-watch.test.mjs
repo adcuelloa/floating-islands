@@ -3,19 +3,23 @@
 // upstream is never contacted here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-  clean, fence, nextState, parseLsRemote, parseState, planTarget, releaseFindings, span, validateInventory,
+  analyze, clean, contractRows, fence, isDetectorInput, nextState, parseContract, parseLsRemote, parseState, planTarget, releaseFindings, safeErrorText, span, validateInventory,
 } from "../../.github/upstream-watch/lib.mjs";
-import { lstatSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { LIMITS, main, materialize, prepareClone } from "../../.github/upstream-watch/inspect.mjs";
+import { aggregate } from "../../.github/upstream-watch/aggregate.mjs";
+import { LIMITS, main, materialize, objectStoreKiB, prepareClone } from "../../.github/upstream-watch/inspect.mjs";
 
 import {
-  sha, A, B, C, D, X1, X2, X3, ch, cap, inventory, capabilityIds, rows, contractOut, api, baseFiles, target, run, edit, only, report, lsRemote, renderSummary, validate,
+  sha, A, B, C, D, X1, X2, X3, ch, cap, inventory, capabilityIds, rows, contractOut, contractPorcelain, api, baseFiles, target, run, edit, only, report, lsRemote, renderSummary, validate,
 } from "./upstream-fixtures.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 test("unchanged upstream revision: no range, no findings", () => {
   const git = { has: () => true, isAncestor: () => true, mergeBase: () => C };
@@ -288,4 +292,265 @@ test("resource limits: an oversized tree or object store fails closed and writes
   const out = { report: join(dir, "r.json"), state: join(dir, "s.json") };
   assert.throws(() => main(["--work", join(dir, "work"), "--url", `file://${up}`, "--report", out.report, "--emit-state", out.state]), /refusing to analyse/);
   assert.equal(existsSync(out.report) || existsSync(out.state), false);
+});
+
+// ---------- independent review regressions (F1-F6 + stderr sanitization)
+
+test("F1: actual check-contract.sh distinguishes KeyboardPanel anchorItem and bar rows independently", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fi-watch-f1-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const realRows = contractRows(readFileSync(join(repoRoot, "tests/contract/contract.tsv"), "utf8"));
+  const kpRows = [...realRows.entries()].filter(([, r]) => r.area === "panel" && r.reason === "given at construction (setSource)");
+  assert.equal(kpRows.length, 2, "both KeyboardPanel construction rows must have distinct identities");
+  const [[anchorKey, anchorRow], [barKey, barRow]] = kpRows;
+  assert.notEqual(anchorKey, barKey);
+  assert.match(anchorRow.pattern, /anchorItem/);
+  assert.match(barRow.pattern, /QtObject bar/);
+
+  const runChecker = (qml) => {
+    const tree = join(dir, "omarchy");
+    mkdirSync(join(tree, "shell/Ui"), { recursive: true });
+    writeFileSync(join(tree, "shell/Ui/KeyboardPanel.qml"), qml);
+    try {
+      return execFileSync(join(repoRoot, "tests/contract/check-contract.sh"), ["--advisory", "--porcelain"],
+        { env: { ...process.env, OMARCHY_PATH: tree }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      assert.equal(e.status, 1);
+      return e.stdout;
+    }
+  };
+
+  const fullQml = "Item {\n  required property Item anchorItem\n  required property QtObject bar\n}\n";
+  const noAnchorQml = "Item {\n  required property QtObject bar\n}\n";
+  const noBarQml = "Item {\n  required property Item anchorItem\n}\n";
+  const baseContract = parseContract(runChecker(fullQml), realRows);
+  const noAnchorContract = parseContract(runChecker(noAnchorQml), realRows);
+  const noBarContract = parseContract(runChecker(noBarQml), realRows);
+
+  assert.equal(baseContract.get(anchorKey), "ok");
+  assert.equal(baseContract.get(barKey), "ok");
+  assert.equal(noAnchorContract.get(anchorKey), "FAIL");
+  assert.equal(noAnchorContract.get(barKey), "ok");
+  assert.equal(noBarContract.get(anchorKey), "ok");
+  assert.equal(noBarContract.get(barKey), "FAIL");
+
+  const d1Anchor = only(analyze({
+    inventory, target: target(), rows: realRows, introducing: () => X1,
+    files: { base: new Map([["shell/Ui/KeyboardPanel.qml", fullQml]]), head: new Map([["shell/Ui/KeyboardPanel.qml", noAnchorQml]]) },
+    contract: { base: baseContract, head: noAnchorContract },
+  }), "D1");
+  const d1AnchorBreaking = d1Anchor.filter((f) => f.severity === "breaking");
+  assert.equal(d1AnchorBreaking.length, 1);
+  assert.equal(d1AnchorBreaking[0].subject, anchorKey);
+  assert.equal(d1Anchor.some((f) => f.subject === barKey), false, "removing anchorItem must not trip the bar row");
+
+  const d1Bar = only(analyze({
+    inventory, target: target(), rows: realRows, introducing: () => X1,
+    files: { base: new Map([["shell/Ui/KeyboardPanel.qml", fullQml]]), head: new Map([["shell/Ui/KeyboardPanel.qml", noBarQml]]) },
+    contract: { base: baseContract, head: noBarContract },
+  }), "D1");
+  assert.equal(d1Bar.length, 1);
+  assert.equal(d1Bar[0].subject, barKey);
+  assert.equal(d1Bar[0].severity, "breaking");
+});
+
+test("F1: incomplete, duplicated, mismatched or missing contract results fail closed", () => {
+  const valid = contractPorcelain();
+  const lines = valid.split("\n");
+  // missing summary
+  assert.throws(() => parseContract(lines.slice(0, -1).join("\n"), rows), /missing summary/);
+  // missing row (with summary adjusted)
+  assert.throws(() => parseContract([...lines.slice(1, -1), "contract: 3 passed, 0 failed, 0 conditional warnings"].join("\n"), rows), /missing result/);
+  // duplicate row line number
+  assert.throws(() => parseContract([lines[0], ...lines].join("\n"), rows), /duplicate result/);
+  // mismatched summary count
+  assert.throws(() => parseContract([...lines.slice(0, -1), "contract: 99 passed, 0 failed, 0 conditional warnings"].join("\n"), rows), /disagree with summary/);
+  // mismatched area/reason metadata
+  assert.throws(() => parseContract([lines[0].replace("widgets", "other"), ...lines.slice(1)].join("\n"), rows), /mismatched metadata/);
+  // D1 never treats a missing map entry as "ok"
+  const partial = new Map(contractOut());
+  partial.delete([...rows.keys()][0]);
+  assert.throws(() => run(baseFiles(), { contract: { base: contractOut(), head: partial } }), /missing contract result/);
+});
+
+test("F2: identical fingerprints across different refs validate and aggregate; same-ref duplicates still fail", () => {
+  const head = edit((m) => m.set("shell/Ui/PluginBarApi.qml", api("property var _optIn: null", "property var _gone: null", "function show(a, b) {}")));
+  const contract = { base: contractOut(), head: contractOut([[...rows.keys()][0]]) };
+  const trunk = run(head, { contract, t: target({ ref: "quattro", role: "trunk" }), intro: () => X1 });
+  const rl = run(head, { contract, t: target({ ref: "v4-5-1", role: "release-line" }), intro: () => X1 });
+  // Same finding + same attribution SHA => identical fingerprints on both refs.
+  assert.deepEqual(trunk.map((f) => f.fingerprint).sort(), rl.map((f) => f.fingerprint).sort());
+  const r = report([...trunk, ...rl], [target({ ref: "quattro", role: "trunk" }), target({ ref: "v4-5-1", role: "release-line" })]);
+  assert.doesNotThrow(() => validate(r));
+  const its = aggregate(r, { inventory, rows });
+  const brk = its.filter((i) => i.category === "breaking");
+  assert.equal(brk.length, 1);
+  assert.deepEqual(brk[0].refs, ["quattro", "v4-5-1"]);
+  assert.equal(brk[0].members.length, 2 * trunk.length);
+  // Same-ref duplicate fingerprint is still rejected.
+  const dup = JSON.parse(JSON.stringify(r));
+  dup.findings.push({ ...dup.findings[0] });
+  dup.totals[dup.findings[0].severity]++;
+  assert.throws(() => validate(dup), /duplicate fingerprint for ref/);
+});
+
+test("F3: headerless CLI addition and removing the last header emit null evidence text and validate", () => {
+  const fs = run(edit((m) => {
+    m.set("bin/omarchy-shell-extra", "#!/bin/bash\necho hi\n");
+    m.set("bin/omarchy-bar", "#!/bin/bash\n# plain comment, no omarchy header\n");
+  }));
+  const d4 = only(fs, "D4");
+  const added = d4.find((f) => f.subject === "cli omarchy-shell-extra");
+  const changed = d4.find((f) => f.subject === "cli omarchy-bar");
+  assert.ok(added && changed);
+  assert.equal(added.kind, "cli-added");
+  assert.deepEqual(added.evidence, [{ sha: C, path: "bin/omarchy-shell-extra", line: null, text: null }]);
+  assert.equal(changed.kind, "cli-changed");
+  assert.equal(changed.evidence[0].text, "# omarchy:summary=Configure the bar");
+  assert.deepEqual(changed.evidence[1], { sha: C, path: "bin/omarchy-bar", line: null, text: null });
+  const r = report(fs);
+  assert.doesNotThrow(() => validate(r));
+  assert.doesNotThrow(() => renderSummary(r));
+  // Schema requirement is NOT weakened: empty string evidence text is still rejected.
+  const bad = JSON.parse(JSON.stringify(r));
+  bad.findings[0].evidence[0].text = "";
+  assert.throws(() => validate(bad), /evidence\[0\]\.text: string/);
+});
+
+test("F4: D2 removal referenced only by a conditional contract row stays review, not breaking", () => {
+  const onlyConditional = only(run(edit((m) => m.set("shell/Ui/PluginBarApi.qml",
+    api("property var _hide: null", "property var _gone: null", "function show(a, b) {}")))), "D2");
+  assert.equal(onlyConditional.length, 1);
+  assert.equal(onlyConditional[0].kind, "api-removed");
+  assert.equal(onlyConditional[0].symbol, "_optIn");
+  assert.equal(onlyConditional[0].severity, "review", "conditional contract row must not promote D2 removal to breaking");
+});
+
+test("F6: oversized detector input marks affected target failed (exit 3) while preserving healthy target; late object growth fails closed (exit 2)", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fi-watch-f6-"));
+  const saved = { ...LIMITS };
+  t.after(() => { Object.assign(LIMITS, saved); rmSync(dir, { recursive: true, force: true }); });
+  const up = join(dir, "up");
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const g = (...a) => execFileSync("git", ["-C", up, ...a], { env, stdio: "pipe" }).toString().trim();
+
+  // Build synthetic upstream with baseline commit, healthy v4-5-1, and oversized detector input on quattro.
+  mkdirSync(join(up, "shell/Ui"), { recursive: true });
+  mkdirSync(join(up, "shell/assets"), { recursive: true });
+  mkdirSync(join(up, "bin"), { recursive: true });
+  writeFileSync(join(up, "shell/Ui/PluginBarApi.qml"), api("property var _hide: null"));
+  writeFileSync(join(up, "bin/omarchy-bar"), "#!/bin/bash\n# omarchy:summary=Bar\n");
+  execFileSync("git", ["init", "-q", "-b", "quattro", up], { env });
+  g("add", "-A");
+  g("-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "baseline");
+  const baseSha = g("rev-parse", "HEAD");
+  g("tag", "v4.5.0");
+
+  // Branch v4-5-1: small healthy CLI change + non-detector large asset (skipped safely).
+  g("checkout", "-q", "-b", "v4-5-1");
+  writeFileSync(join(up, "bin/omarchy-bar"), "#!/bin/bash\n# omarchy:summary=Bar v2\n");
+  writeFileSync(join(up, "shell/assets/banner.bin"), "x".repeat(4000));
+  g("add", "-A");
+  g("-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "healthy release line");
+  const rlSha = g("rev-parse", "HEAD");
+
+  // Branch quattro: oversized detector input (shell/Ui/PluginBarApi.qml).
+  g("checkout", "-q", "quattro");
+  writeFileSync(join(up, "shell/Ui/PluginBarApi.qml"), api("property var _hide: null") + "\n// " + "y".repeat(4000) + "\n");
+  g("add", "-A");
+  g("-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "oversized api file");
+  const trunkSha = g("rev-parse", "HEAD");
+
+  const invPath = join(dir, "capabilities.json");
+  const synInv = {
+    ...inventory,
+    revisions: {
+      baseline: { ref: "v4.5.0", sha: baseSha },
+      release_line: { ref: "v4-5-1", sha: rlSha },
+      trunk: { ref: "quattro", sha: trunkSha },
+    },
+  };
+  writeFileSync(invPath, JSON.stringify(synInv));
+
+  // Verify detector-input classification directly.
+  assert.equal(isDetectorInput("shell/Ui/PluginBarApi.qml", { inventory: synInv, rows }), true);
+  assert.equal(isDetectorInput("shell/assets/banner.bin", { inventory: synInv, rows }), false);
+
+  // Run main with fileBytes = 1000: quattro fails (oversized detector input), v4-5-1 succeeds (exit 3, no state emitted).
+  LIMITS.fileBytes = 1000;
+  const out = { report: join(dir, "report.json"), summary: join(dir, "summary.md"), state: join(dir, "state.json") };
+  const code = main(["--work", join(dir, "work1"), "--url", `file://${up}`, "--report", out.report, "--summary", out.summary, "--emit-state", out.state], { inventoryPath: invPath });
+  assert.equal(code, 3, "partial inspection failure must exit 3");
+  assert.equal(existsSync(out.state), false, "incomplete inspection must not emit state");
+  const rep = JSON.parse(readFileSync(out.report, "utf8"));
+  const trunkT = rep.targets.find((x) => x.ref === "quattro");
+  const rlT = rep.targets.find((x) => x.ref === "v4-5-1");
+  assert.equal(trunkT.status, "failed");
+  assert.match(trunkT.error, /detector input shell\/Ui\/PluginBarApi\.qml.*exceeds 1000 bytes/);
+  assert.equal(rlT.status, "cumulative");
+  assert.ok(rep.findings.some((f) => f.ref === "v4-5-1" && f.detector === "D4"), "healthy target findings are preserved");
+  assert.equal(rep.findings.some((f) => f.ref === "quattro"), false, "failed target emits no partial findings");
+
+  // Late object growth during blob hydration: set objectsKiB just above blobless fetch size, below hydrated checkout size.
+  Object.assign(LIMITS, saved);
+  const bigUp = join(dir, "big-up");
+  mkdirSync(join(bigUp, "shell/Ui"), { recursive: true });
+  writeFileSync(join(bigUp, "shell/Ui/PluginBarApi.qml"), api("property var _hide: null"));
+  execFileSync("git", ["init", "-q", "-b", "quattro", bigUp], { env });
+  const bg = (...a) => execFileSync("git", ["-C", bigUp, ...a], { env, stdio: "pipe" }).toString().trim();
+  bg("config", "uploadpack.allowFilter", "true");
+  bg("config", "uploadpack.allowAnySHA1InWant", "true");
+  bg("add", "-A");
+  bg("-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "base");
+  const bigBase = bg("rev-parse", "HEAD");
+  bg("tag", "v4.5.0");
+  bg("branch", "v4-5-1");
+  // Add an incompressible ~200 KiB file so blob hydration grows the object store well past blobless fetch.
+  const noise = randomBytes(120_000).toString("base64");
+  writeFileSync(join(bigUp, "shell/Ui/PluginBarApi.qml"), `${api("property var _hide: null")}\n// ${noise}\n`);
+  bg("add", "-A");
+  bg("-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "large blob");
+  const bigHead = bg("rev-parse", "HEAD");
+
+  const bigInvPath = join(dir, "big-capabilities.json");
+  writeFileSync(bigInvPath, JSON.stringify({
+    ...inventory,
+    revisions: {
+      baseline: { ref: "v4.5.0", sha: bigBase },
+      release_line: { ref: "v4-5-1", sha: bigBase },
+      trunk: { ref: "quattro", sha: bigHead },
+    },
+  }));
+  // Measure blobless clone size vs hydrated size to place the limit strictly between them.
+  const probeClone = join(dir, "probe");
+  prepareClone(`file://${bigUp}`, probeClone, "quattro");
+  const bloblessKiB = objectStoreKiB(probeClone);
+  materialize(probeClone, bigHead);
+  const hydratedKiB = objectStoreKiB(probeClone);
+  assert.ok(hydratedKiB > bloblessKiB, `expected hydration to grow object store (${bloblessKiB} -> ${hydratedKiB} KiB)`);
+
+  LIMITS.objectsKiB = bloblessKiB + Math.floor((hydratedKiB - bloblessKiB) / 2);
+  const out2 = { report: join(dir, "r2.json"), summary: join(dir, "s2.md"), state: join(dir, "st2.json") };
+  assert.throws(
+    () => main(["--work", join(dir, "work2"), "--url", `file://${bigUp}`, "--report", out2.report, "--summary", out2.summary, "--emit-state", out2.state], { inventoryPath: bigInvPath }),
+    /after blob hydration.*refusing to analyse/,
+  );
+  assert.equal(existsSync(out2.report) || existsSync(out2.summary) || existsSync(out2.state), false, "late object growth must write nothing");
+});
+
+test("untrusted Git error output cannot inject GitHub Actions workflow commands", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fi-watch-err-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const sanitized = safeErrorText("::error file=a::boom\n::add-mask::secret\x1b[31m<!--x-->");
+  assert.equal(sanitized.includes("::"), false);
+  assert.equal(sanitized.includes("\n"), false);
+  assert.equal(sanitized.includes("<!--"), false);
+  assert.throws(
+    () => main(["--work", join(dir, "work"), "--url", `file://${join(dir, "::error::injected")}`]),
+    (err) => {
+      assert.match(err.message, /git ls-remote failed/);
+      assert.equal(err.message.includes("::"), false, "workflow command syntax must be neutralized");
+      return true;
+    },
+  );
 });

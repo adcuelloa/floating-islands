@@ -18,9 +18,12 @@ const CHANGE_RANK = ["regression", "removed", "modified", "added", "migration", 
 const OWN_SHORTCUTS = /^SUPER \+ CTRL \+ (ALT \+ .+|[1-9])$/;
 
 const dirOf = (p) => p.slice(0, p.lastIndexOf("/") + 1);
-const pluginDir = (p) => /^shell\/plugins\/(?:bar\/widgets\/[^/.]+|[^/]+)\//.exec(p ?? "")?.[0] ?? null;
+// Dedicated directory for a manifest.json plugin; flat *.manifest.json files share a parent dir and own none.
+const manifestDir = (p) => (p && /(?:^|\/)manifest\.json$/.test(p) && p.startsWith("shell/plugins/") ? dirOf(p) : null);
 const PRIORITY = ["D1", "D3", "D2", "D7", "D5", "D4", "D6", "D8", "D9"];
-const byPriority = (a, b) => PRIORITY.indexOf(a.detector) - PRIORITY.indexOf(b.detector) || (a.fingerprint < b.fingerprint ? -1 : 1);
+const byPriority = (a, b) =>
+  PRIORITY.indexOf(a.detector) - PRIORITY.indexOf(b.detector)
+  || (a.fingerprint < b.fingerprint ? -1 : a.fingerprint > b.fingerprint ? 1 : a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
 
 /** Union-find over indices. */
 function components(n, edges) {
@@ -61,7 +64,7 @@ function item({ category, anchor, subsystem, members, note = null }) {
   return {
     topic: hash16([category, anchor].join("\u0000")), category, change: changes[0], changes, anchor, subsystem, note,
     primary, capabilities: caps, refs: [...new Set(members.map((f) => f.ref))].sort(),
-    fingerprints: members.map((f) => f.fingerprint).sort(), members,
+    fingerprints: [...new Set(members.map((f) => f.fingerprint))].sort(), members,
   };
 }
 
@@ -75,7 +78,13 @@ export function aggregate(report, { inventory, rows }) {
   const F = report.findings;
   const claimed = new Set();
   const items = [];
-  const claim = (list) => { for (const f of list) claimed.add(f); return list; };
+  const claim = (list) => {
+    for (const f of list) {
+      if (claimed.has(f)) throw new Error(`aggregate: raw finding assigned more than once (${f.ref} ${f.fingerprint})`);
+      claimed.add(f);
+    }
+    return list;
+  };
 
   // 1. Incompatibilities: a contract regression and the removals that explain it are one item.
   const removal = F.filter((f) => f.kind === "regression" || (["api-removed", "manifest-removed", "path-removed"].includes(f.kind)));
@@ -105,15 +114,20 @@ export function aggregate(report, { inventory, rows }) {
     const paths = new Set(members.map((f) => f.path));
     members.push(...F.filter((g) => g.kind === "path-touched" && g.ref === members[0].ref && paths.has(g.path) && !claimed.has(g) && !members.includes(g)));
     const lead = [...members].sort(byPriority)[0];
-    const optIn = members.every((f) => f.kind !== "regression" || f.severity !== "breaking") && members.some((f) => f.kind === "regression");
-    items.push(item({ category: "breaking", anchor: `${lead.subject}`, subsystem: lead.path ?? lead.scope,
+    const hasBreaking = members.some((f) => f.severity === "breaking");
+    const optIn = !hasBreaking && members.some((f) => f.kind === "regression");
+    items.push(item({ category: hasBreaking ? "breaking" : "modification", anchor: `${lead.subject}`, subsystem: lead.path ?? lead.scope,
       members: claim(members), note: optIn ? "Affects an opt-in feature only (conditional contract row)." : null }));
   }
 
   // 2. New capabilities: a manifest the inventory does not ship, plus what came with it.
-  for (const f of F.filter((f) => !claimed.has(f) && f.detector === "D3" && (f.kind === "capability-new" || (f.kind === "manifest-added" && detected.has(f.primary))))) {
-    const dir = pluginDir(f.path);
-    const extra = F.filter((g) => !claimed.has(g) && g !== f && g.ref === f.ref && dir && pluginDir(g.path) === dir);
+  // Reserve independent manifest leaders before assigning supporting evidence so no leader can be claimed twice.
+  const leaders = F.filter((f) => !claimed.has(f) && f.detector === "D3" && (f.kind === "capability-new" || (f.kind === "manifest-added" && detected.has(f.primary))));
+  const leaderSet = new Set(leaders);
+  for (const f of leaders) {
+    if (claimed.has(f)) continue;
+    const dir = manifestDir(f.path);
+    const extra = F.filter((g) => !claimed.has(g) && !leaderSet.has(g) && g !== f && g.ref === f.ref && dir && g.path?.startsWith(dir));
     items.push(item({ category: "new-capability", anchor: `manifest ${f.symbol}`, subsystem: dir ?? f.path, members: claim([f, ...extra]),
       note: "A finding, not an approved feature. Integration and placement stay open for maintainer and community review." }));
   }
@@ -173,12 +187,17 @@ export function aggregate(report, { inventory, rows }) {
     if (!prev) { merged.set(it.topic, it); continue; }
     merged.set(it.topic, { ...item({ category: it.category, anchor: it.anchor, subsystem: it.subsystem, members: [...prev.members, ...it.members], note: it.note }), change: prev.change });
   }
-  return [...merged.values()].sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category) || (a.subsystem < b.subsystem ? -1 : a.subsystem > b.subsystem ? 1 : a.topic < b.topic ? -1 : 1));
+  const out = [...merged.values()].sort((a, b) => CATEGORIES.indexOf(a.category) - CATEGORIES.indexOf(b.category) || (a.subsystem < b.subsystem ? -1 : a.subsystem > b.subsystem ? 1 : a.topic < b.topic ? -1 : 1));
+  const counts = new Map();
+  for (const it of out) for (const f of it.members) counts.set(f, (counts.get(f) || 0) + 1);
+  if (counts.size !== F.length || F.some((f) => counts.get(f) !== 1))
+    throw new Error("aggregate: every raw finding must belong to exactly one item");
+  return out;
 }
 
 export function itemTitle(it) {
   const caps = it.capabilities.length ? it.capabilities.join(", ") : "unmapped";
-  const what = it.category === "breaking" ? `Upstream breaking change: ${it.anchor.replace(/^\[[\w-]+\] /, "")}`
+  const what = it.category === "breaking" ? `Upstream breaking change: ${it.anchor.replace(/^\[[\w-]+(?:#[0-9a-f]+)?\] /, "")}`
     : it.category === "new-capability" ? `New upstream capability: ${it.anchor.replace(/^manifest /, "")}`
     : it.category === "uncertain" ? `Upstream triage: ${it.anchor}`
     : `Upstream ${it.change} in ${it.subsystem}`;

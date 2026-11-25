@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Read-only preview only; automated issue reporting is not enabled in this workflow"
+        description: "Informational only: inspect-only workflow (both true and false are strictly read-only)"
         type: boolean
         default: true
 

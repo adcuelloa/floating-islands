@@ -135,4 +135,10 @@ if ! check_copy --advisory && grep -q '^FAIL .*_setCenterHoverRevealSuppressed' 
   echo "ok   --advisory still fails a required row"
 else report "--advisory still fails a required row"; fi
 
+# --- porcelain output: unambiguous line-numbered rows for watcher parsing
+fresh_copy
+if check_copy --advisory --porcelain && [[ $(grep -c $'^row\t' "$work/out") == $(grep -oE '^contract: [0-9]+ passed' "$work/out" | grep -oE '[0-9]+') ]]; then
+  echo "ok   --porcelain emits one machine-readable row per contract entry"
+else report "--porcelain emits one machine-readable row per contract entry"; fi
+
 (( failed == 0 )) && echo "contract self-test: passed" || { echo "contract self-test: $failed failed"; exit 1; }
