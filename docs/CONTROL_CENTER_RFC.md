@@ -45,7 +45,31 @@ Our firm product goal is **one unified system-control entry point** so the statu
 5. **Keyboard accessibility:** Full keyboard navigation (Tab between groups, arrows within grids, slider keys, Escape to step back/close), keyboard-only focus rings, accurate `Accessible` roles/names/descriptions, and zero focus grabs while closed.
 6. **Themes, reduced motion & multi-monitor:** Live `Theme.qml` tokens only (dark & light contrast), zero transitions when animations are off, and clean per-output anchoring on mixed-scale monitors.
 
-## 4. Open Design Questions for Community Feedback
+## 4. Design Direction & Exploratory Proposals
+
+This section captures the current owner-supported design direction alongside exploratory proposals so contributors share a common visual and architectural vocabulary. Neither category finalizes widget placement or broadens v1.0 acceptance criteria; open placement and interaction choices remain in Section 5.
+
+### Owner-Supported Design Direction
+
+- **Composition & visual language:** Combine Samsung One UI-inspired grouped quick settings, stateful circular controls, thick sliders, and modular customization with macOS-inspired desktop composition, information hierarchy, and secondary navigation.
+- **Native Omarchy integration:** Build directly on native Omarchy services, `Theme.qml` tokens (bound to `Commons.Color` and `Commons.Style`), and `KeyboardPanel` integration — no second theme system or background daemon.
+- **Dynamic media module:** Include a Control Center media module with album artwork and optional artwork-derived colors where supported, sharing the underlying media service (`omarchy.media`) with the existing bar `MediaIsland`.
+- **Personalization & visual layout editing:**
+  - Discrete module size variants.
+  - Visual layout editing to reorder, resize, add, and remove controls.
+  - Customizable Quick Settings group.
+  - Explicit apply, cancel, and reset behavior persisted via validated preferences.
+  - Full keyboard-accessible editing (matching Constraint 5).
+  - **Safety invariant:** Removing a control must never disable its underlying service or hide required critical indicators.
+- **Progressive migration:** Every hosted stock widget remains untouched until its native replacement achieves verified functional parity or an explicitly accepted fallback (Constraint 1).
+
+### Exploratory Proposals (Unscheduled)
+
+- **Desktop Appearance module / settings:** Potential controls for window rounding, border thickness, active/inactive/fullscreen opacity, inner and outer gaps, native appearance and animation settings where supported, and visual bar settings (bar presentation style, density, island visibility, and placement).
+  - **Prerequisite:** Native Omarchy configuration mechanisms must be investigated before designing persistence or compositor writes, preserving the plugin-only boundary (never editing `/usr/share/omarchy` or unmanaged Hyprland user config).
+- **Bar presentation modes:** Exploratory Floating, Unified, and Automatic presentation modes (with Automatic reacting to effective desktop gaps), kept separate from density and responsive content tiers, are tracked in [docs/ROADMAP.md](ROADMAP.md#product-design-direction--proposals).
+
+## 5. Open Design Questions for Community Feedback (Unresolved)
 
 1. **System tray (`omarchy.tray`):** Should the system tray stay as a separate micro-island, an expandable drawer next to the Control Center entry, or a section/page inside the Control Center?
 2. **Agents & third-party widgets (`omarchy.agents`, custom/cloned plugins):** Should they get dedicated slots on the bar, or live in an Extensions/Panels page inside the Control Center?
