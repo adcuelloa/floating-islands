@@ -1,0 +1,104 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { load } from "./qmljs.mjs";
+
+const Layout = load("geometry/Layout.js");
+const m = Layout.metrics(1, "compact");
+
+// Widths estimated from the V2 prototype at a 12 px base font (see
+// docs/COMPATIBILITY.md, "Responsive tiers"). At runtime they are measured.
+const LEFT = 280;          // launcher + workspaces island, plus the group gap
+const RIGHT_EXPANDED = 596; // planned media (expanded) + status + bell islands
+const demands = {
+  full: { center: 175, leftFixed: LEFT, titleMin: 120, rightFixed: RIGHT_EXPANDED },
+  compact: { center: 135, leftFixed: LEFT, titleMin: 120, rightFixed: 420 },
+  minimal: { center: 80, leftFixed: 272, titleMin: 0, rightFixed: 222 },
+};
+
+// [label, logical width, expected tier, expected title cap]
+const outputs = [
+  ["1920x1080 @1.0", 1920, "full", 480],
+  ["1920x1080 @1.25", 1536, "full", 372],
+  ["1920x1080 @1.5", 1280, "compact", 240],
+  ["1366x768 @1.0", 1366, "compact", 240],
+  ["1366x768 @1.25", 1093, "compact", 171],
+  ["2560x1440 @1.0", 2560, "full", 480],
+  ["2560x1440 @1.25", 2048, "full", 480],
+  ["2560x1440 @1.5", 1707, "full", 458],
+  ["2560x1440 @2.0", 1280, "compact", 240],
+  ["1024 logical", 1024, "minimal", 0],
+];
+
+for (const [label, width, tier, title] of outputs) {
+  test(`tier for ${label} (${width} logical px) is ${tier}`, () => {
+    const chosen = Layout.chooseTier(width, demands, m, "full");
+    assert.equal(chosen, tier);
+    assert.equal(Layout.titleWidth(chosen, width, demands[chosen], m), title);
+  });
+}
+
+test("the 1700 px prototype threshold is not what decides: 1536 logical is full", () => {
+  assert.equal(Layout.chooseTier(1536, demands, m, "compact"), "full");
+});
+
+test("growing back to a richer tier needs hysteresis slack", () => {
+  // compact -> full needs slack >= 24 px; at 1536 slack is 56.5, at 1490 it is 33.5
+  assert.equal(Layout.chooseTier(1490, demands, m, "compact"), "full");
+  // full fits by 7.5 px at 1444 but compact was showing: stays compact.
+  assert.equal(Layout.chooseTier(1444, demands, m, "full"), "full");
+  assert.equal(Layout.chooseTier(1444, demands, m, "compact"), "compact");
+});
+
+test("exclusive zone is gap plus island height; windows start at 60 with gaps_out 10", () => {
+  assert.equal(Layout.exclusiveZone(m), 50);
+  assert.equal(Layout.exclusiveZone(m) + 10, 60);
+  assert.equal(Layout.exclusiveZone(Layout.metrics(1, "comfortable")), 56);
+});
+
+test("metrics follow the Omarchy spacing scale", () => {
+  const big = Layout.metrics(1.25, "compact");
+  assert.equal(big.islandHeight, 50);
+  assert.equal(big.edgeGap, 13);
+  assert.equal(Layout.metrics(0, "nonsense").islandHeight, 40);
+});
+
+test("panel max height uses the logical screen height", () => {
+  assert.equal(Layout.panelMaxHeight(864, m), 794);
+  assert.equal(Layout.panelMaxHeight(768, m), 698);
+});
+
+test("only horizontal edges; vertical positions fall back to top", () => {
+  assert.equal(Layout.normalizeEdge("bottom"), "bottom");
+  for (const p of ["top", "left", "right", undefined, "x"]) assert.equal(Layout.normalizeEdge(p), "top");
+});
+
+test("islands hang from the anchored edge", () => {
+  assert.equal(Layout.islandY("top", 864, m), 10);
+  assert.equal(Layout.islandY("bottom", 864, m), 864 - 10 - 40);
+});
+
+test("hit rects reach the screen edge and a few px past the island", () => {
+  const island = { x: 12, y: 10, width: 200, height: 40 };
+  assert.deepEqual(JSON.parse(JSON.stringify(Layout.hitRect(island, "top", 864, m))), { x: 9, y: 0, width: 206, height: 55 });
+  const low = { x: 12, y: 814, width: 200, height: 40 };
+  assert.deepEqual(JSON.parse(JSON.stringify(Layout.hitRect(low, "bottom", 864, m))), { x: 9, y: 809, width: 206, height: 55 });
+  assert.equal(Layout.hitRect({ x: 5, y: 5, width: 0, height: 40 }, "top", 864, m).width, 0);
+});
+
+test("button reach meets the hit rect", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(Layout.buttonReach("top", m))), { top: 14, bottom: 5 });
+  assert.deepEqual(JSON.parse(JSON.stringify(Layout.buttonReach("bottom", m))), { top: 5, bottom: 14 });
+});
+
+// Omarchy places hosted panels at barSizeFor() + Style.gapsOut (half of
+// Hyprland's gaps_out), so the gap under the islands followed the user's
+// gaps: 5 px by default, 0 with Super+Shift+Backspace (trial 4). The size the
+// bar reports makes up the difference, so every panel sits panelGap below.
+test("panels sit panelGap below the islands whatever Hyprland's gaps are", () => {
+  const islandBottom = Layout.exclusiveZone(m);
+  for (const gapsOut of [0, 3, 5, 8, 10]) {
+    assert.equal(Layout.panelBarSize(m, gapsOut) + gapsOut, islandBottom + m.panelGap, `gapsOut ${gapsOut}`);
+  }
+  assert.equal(Layout.panelBarSize(m, 400), 0, "never negative");
+  assert.equal(Layout.panelBarSize(m, NaN), islandBottom + m.panelGap - 0, "an unknown gap counts as none");
+});

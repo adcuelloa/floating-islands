@@ -1,0 +1,1087 @@
+{
+  "schema": 1,
+  "product_rules": ["One unified system-control entry point on the status island. Where each widget, indicator and menu lives, and how the Control Center navigates, stays open to community feedback (docs/CONTROL_CENTER_RFC.md)."],
+  "revisions": {
+    "baseline": {"ref": "v4.5.0", "package": "omarchy 4.5.0-3", "sha": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"},
+    "release_line": {"ref": "v4-5-1", "sha": "9fca57897c453bc248de207eeb4fbd0047b9c48b"},
+    "trunk": {"ref": "quattro", "sha": "65d3982b3c435351d7d013674165c7c14b530226"}
+  },
+  "capabilities": [
+    {
+      "id": "host.bar-contract",
+      "title": "Bar plugin selection, loading, injection and host members",
+      "kind": "host",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.bar"],
+        "paths": ["shell/shell.qml", "bin/omarchy-bar", "bin/omarchy-shell-config", "bin/omarchy-plugin-validate"],
+        "api": ["kind \"bar\" + entryPoints.bar", "Bar.shell/manifest/barWidgetRegistry/barConfig injection", "shell.bar host members"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "ok",
+        "evidence": ["contract rows manifest/selection/settings/lifecycle/inject/host pass on trunk"]
+      },
+      "contract_areas": ["manifest", "selection", "settings", "lifecycle", "inject", "host"],
+      "fi_files": ["plugin/Bar.qml", "plugin/core/BarSurface.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "host.widget-facade",
+      "title": "PluginBarApi facade given to hosted widgets",
+      "kind": "api",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["shell/Ui/PluginBarApi.qml", "shell/Ui/qmldir"],
+        "api": ["PluginBarApi._* callbacks", "PluginBarApi.clickTargets", "PluginBarApi.foreignPopoutMarker"]
+      },
+      "depends_on": [],
+      "integration": {"current": "hosted", "intended": "hosted"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "broken",
+        "evidence": ["upstream c149addc: _setCenterHoverRevealSuppressed removed from PluginBarApi (caught once the contract checks one symbol per row)", "WidgetHosting.retire() assigns it; Qt 6.12 throws 'Cannot assign to non-existent property'"]
+      },
+      "contract_areas": ["widgets"],
+      "fi_files": ["plugin/core/WidgetHosting.qml", "plugin/core/HostedBarApi.qml", "plugin/core/Facades.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "host.first-party-scope",
+      "title": "First-party flag from the manifest scan (all click targets vs scoped API)",
+      "kind": "api",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["shell/services/PluginRegistry.qml", "shell/plugins/bar/Bar.qml"],
+        "api": ["manifest.__isFirstParty", "registry metadata firstParty"]
+      },
+      "depends_on": [],
+      "integration": {"current": "hosted", "intended": "hosted"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "changed",
+        "evidence": ["upstream 0810fdb9: scan framing rewritten; flag still set from the scan kind (semantic rule holds)"]
+      },
+      "contract_areas": ["handover"],
+      "fi_files": ["plugin/core/WidgetHosting.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "host.panel-anchor-redirect",
+      "title": "Re-anchoring a hosted widget's panel to another button",
+      "kind": "api",
+      "origin": "baseline",
+      "upstream": {"ids": [], "paths": ["shell/Ui/PluginBarApi.qml", "shell/Ui/KeyboardPanel.qml"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "blocked", "intended": "pending-review"},
+      "placement": {"current": "each hosted widget's own button", "proposed": null, "approval": "open", "rfc": "Q6"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/core/WidgetHosting.qml"],
+      "blockers": [
+        {
+          "id": "no-anchor-hook",
+          "summary": "PluginBarApi has no panel-anchor redirection hook; stock panels anchor to their own button",
+          "upstream_ref": null,
+          "watch": ["panelAnchorFor", "anchorFor", "anchorItem"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "shortcuts.named-panels",
+      "title": "Named panel shortcuts (SUPER+CTRL+letter, SUPER+CTRL+ALT+D/E/W)",
+      "kind": "shortcut",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["default/hypr/bindings/utilities.lua", "bin/omarchy-notification-weather", "shell/shell.qml"],
+        "api": ["shell summon/hide/toggle routed to Bar.summonBarWidget/hideBarWidget/isBarWidgetOpen"]
+      },
+      "depends_on": [],
+      "integration": {"current": "hosted", "intended": "hosted"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "ok",
+        "evidence": ["routes rows for panel = \"omarchy.clock\"/\"omarchy.elsewhen\" pass on trunk"]
+      },
+      "contract_areas": ["routes", "host"],
+      "fi_files": ["plugin/logic/Routes.js", "plugin/core/WidgetHosting.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "shortcuts.numbered-panels",
+      "title": "Numbered bar panel shortcuts (SUPER+CTRL+1..9)",
+      "kind": "shortcut",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["default/hypr/bindings/utilities.lua", "shell/shell.qml"],
+        "api": ["togglePanelAt(section, index)", "Bar.panelWidgetIdAt"]
+      },
+      "depends_on": [],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "right-section hosted buttons in stock order",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q8"
+      },
+      "compat": {
+        "baseline": "ok",
+        "trunk": "broken",
+        "evidence": ["upstream c455e521: bindings now { panel_at = \"right:N\" } global shortcuts; contract routes row fails"]
+      },
+      "contract_areas": ["routes"],
+      "fi_files": ["plugin/core/WidgetHosting.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "hypr.monitor-workspaces",
+      "title": "Per-monitor workspace numbering state",
+      "kind": "config",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["default/hypr/monitor-workspaces.lua"],
+        "api": ["o.workspaces.focus", "$XDG_STATE_HOME/omarchy/monitor-workspaces"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "broken",
+        "evidence": ["upstream 9dbd12dd: state moved to $XDG_STATE_HOME/omarchy/monitors/workspaces"]
+      },
+      "contract_areas": ["hyprland"],
+      "fi_files": ["plugin/adapters/WorkspacesAdapter.qml", "plugin/logic/Workspaces.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "ui.screen-move-remap",
+      "title": "ScreenMoveRemap output-move guard for bar surfaces",
+      "kind": "api",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["shell/Ui/ScreenMoveRemap.qml", "shell/Ui/qmldir"],
+        "api": ["qs.Ui.ScreenMoveRemap"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "broken",
+        "evidence": ["upstream 796e169a: ScreenMoveRemap.qml removed from qs.Ui"]
+      },
+      "contract_areas": ["commons"],
+      "fi_files": ["plugin/core/BarSurface.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "ipc.shell-ipc",
+      "title": "ShellIpc handlers (floating-islands target, bar-off nudge)",
+      "kind": "ipc",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["shell/Commons/ShellIpc.qml", "shell/Commons/qmldir", "bin/omarchy-toggle-bar"],
+        "api": ["qs.Commons.ShellIpc"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "changed",
+        "evidence": ["trunk adds IpcRegistry leader election (enabled: IpcRegistry.leads(...)) to ShellIpc"]
+      },
+      "contract_areas": ["commons", "hyprland"],
+      "fi_files": ["plugin/Bar.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "theme.commons",
+      "title": "Commons.Color roles and groups, Commons.Style motion and metrics",
+      "kind": "theme",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": ["shell/Commons/Color.qml", "shell/Commons/Style.qml", "shell/Commons/qmldir"],
+        "api": ["Commons.Color", "Commons.Style.duration"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": ["theme and geometry contract rows pass on trunk"]},
+      "contract_areas": ["theme", "geometry"],
+      "fi_files": ["plugin/theme/Theme.qml", "plugin/theme/Palette.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "config.default-layout",
+      "title": "Default shell.json bar layout",
+      "kind": "config",
+      "origin": "baseline",
+      "upstream": {"ids": [], "paths": ["config/omarchy/shell.json"], "api": ["bar.layout.right order"]},
+      "depends_on": [],
+      "integration": {"current": "delegated", "intended": "delegated"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "changed",
+        "evidence": ["trunk swaps omarchy.audio and omarchy.network in bar.layout.right (numbered shortcut order follows it)"]
+      },
+      "contract_areas": ["settings"],
+      "fi_files": ["plugin/logic/Settings.js", "plugin/logic/Hosted.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "runtime.quickshell",
+      "title": "Quickshell types the bar uses",
+      "kind": "runtime",
+      "origin": "baseline",
+      "upstream": {
+        "ids": [],
+        "paths": [],
+        "api": ["Quickshell, Quickshell.Wayland, Quickshell.Hyprland, Quickshell.Io types"]
+      },
+      "depends_on": [],
+      "integration": {"current": "delegated", "intended": "delegated"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {
+        "baseline": "ok",
+        "trunk": "unknown",
+        "evidence": ["edge channel ships quickshell 0.3.2.r7.g2b4501a-11; only -1 is verified"]
+      },
+      "contract_areas": ["quickshell"],
+      "fi_files": ["plugin/core/BarSurface.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.menu",
+      "title": "Omarchy menu launcher",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.menu"],
+        "paths": ["shell/plugins/menu/manifest.json"],
+        "api": ["PluginShellApi.toggle"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": "left island launcher", "proposed": null, "approval": "approved", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["service"],
+      "fi_files": ["plugin/widgets/LauncherIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.workspaces",
+      "title": "Workspace indicators",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.workspaces"],
+        "paths": ["shell/plugins/bar/widgets/Workspaces.manifest.json"],
+        "api": []
+      },
+      "depends_on": ["hypr.monitor-workspaces"],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": "left island", "proposed": null, "approval": "approved", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "broken", "evidence": ["via hypr.monitor-workspaces"]},
+      "contract_areas": ["hyprland", "quickshell"],
+      "fi_files": ["plugin/adapters/WorkspacesAdapter.qml", "plugin/widgets/WorkspaceDot.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.active-window",
+      "title": "Active window title",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.active-window"],
+        "paths": ["shell/plugins/bar/widgets/ActiveWindow.manifest.json"],
+        "api": []
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": "title island", "proposed": null, "approval": "approved", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["quickshell"],
+      "fi_files": ["plugin/widgets/TitleIsland.qml", "plugin/adapters/ActiveWindowAdapter.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.clock",
+      "title": "Clock and calendar",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.clock"],
+        "paths": ["shell/plugins/panels/clock/manifest.json", "shell/Ui/KeyboardPanel.qml"],
+        "api": ["KeyboardPanel"]
+      },
+      "depends_on": ["shortcuts.named-panels"],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {
+        "current": "clock island + native calendar panel",
+        "proposed": null,
+        "approval": "approved",
+        "rfc": null
+      },
+      "compat": {
+        "baseline": "ok",
+        "trunk": "changed",
+        "evidence": ["KeyboardPanel.qml changed on trunk (21 lines); panel contract rows pass"]
+      },
+      "contract_areas": ["panel", "routes"],
+      "fi_files": ["plugin/widgets/ClockIsland.qml", "plugin/widgets/CalendarPanel.qml", "plugin/logic/Calendar.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.media",
+      "title": "Media playback (MPRIS through the media service)",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.media"],
+        "paths": ["shell/plugins/services/media/manifest.json"],
+        "api": ["firstPartyServiceFor(\"omarchy.media\")", "runAction", "activePlayer"]
+      },
+      "depends_on": [],
+      "integration": {"current": "native", "intended": "native"},
+      "placement": {"current": "media island", "proposed": null, "approval": "approved", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["media"],
+      "fi_files": ["plugin/widgets/MediaIsland.qml", "plugin/logic/Media.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.tray",
+      "title": "System tray",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.tray"], "paths": ["shell/plugins/bar/widgets/Tray.manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "status island (hosted)", "proposed": null, "approval": "open", "rfc": "Q1"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.agents",
+      "title": "Agents panel",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.agents"], "paths": ["shell/plugins/agents/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "status island (hosted)", "proposed": null, "approval": "open", "rfc": "Q2"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.keyboard-layout",
+      "title": "Keyboard layout indicator",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.keyboard-layout"],
+        "paths": ["shell/plugins/bar/widgets/KeyboardLayout.manifest.json"],
+        "api": []
+      },
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "status island (hosted)", "proposed": null, "approval": "open", "rfc": "Q3"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.bluetooth",
+      "title": "Bluetooth",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.bluetooth"], "paths": ["shell/plugins/panels/bluetooth/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "status island (hosted) + experimental Control Center tile",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q7"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": ["ccbt"],
+      "fi_files": ["plugin/widgets/HostedIsland.qml", "plugin/widgets/ControlCenterRadio.qml", "plugin/adapters/Connectivity.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.network",
+      "title": "Network / Wi-Fi",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.network"], "paths": ["shell/plugins/panels/network/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "status island (hosted) + experimental Control Center tile",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q7"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": ["ccnet"],
+      "fi_files": ["plugin/widgets/HostedIsland.qml", "plugin/adapters/Connectivity.qml"],
+      "blockers": [
+        {
+          "id": "service-less-facade",
+          "summary": "Speed-test and Wi-Fi QR overlays only open from clones under a replacement bar (pluginCloneMaySummon)",
+          "upstream_ref": "omacom/omarchy issue 13289",
+          "watch": ["pluginCloneMaySummon", "pluginShellForBarEntry"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.audio",
+      "title": "Audio output",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.audio"], "paths": ["shell/plugins/panels/audio/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "status island (hosted) + experimental Control Center slider",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q7"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": ["ccaudio"],
+      "fi_files": ["plugin/widgets/HostedIsland.qml", "plugin/adapters/AudioOutput.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.monitor",
+      "title": "Display / brightness",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.monitor"], "paths": ["shell/plugins/panels/monitor/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "status island (hosted) + experimental Control Center slider",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q7"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": ["ccbright"],
+      "fi_files": ["plugin/widgets/HostedIsland.qml", "plugin/adapters/BrightnessAdapter.qml"],
+      "blockers": [
+        {
+          "id": "service-less-facade",
+          "summary": "Brightness OSD only opens from clones under a replacement bar",
+          "upstream_ref": "omacom/omarchy issue 13289",
+          "watch": ["pluginCloneMaySummon"]
+        },
+        {
+          "id": "no-ddc",
+          "summary": "External monitor brightness (DDC/CI) not supported",
+          "upstream_ref": null,
+          "watch": ["ddcutil"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.power",
+      "title": "Battery, power profile and power actions",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.power"], "paths": ["shell/plugins/panels/power/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {
+        "current": "status island (hosted) + experimental Control Center profiles",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q7"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": ["ccpower"],
+      "fi_files": ["plugin/widgets/HostedIsland.qml", "plugin/adapters/PowerProfileAdapter.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.microphone",
+      "title": "Microphone indicator",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.microphone"],
+        "paths": ["shell/plugins/bar/widgets/Microphone.manifest.json"],
+        "api": []
+      },
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "hosted when in bar.layout.right", "proposed": null, "approval": "open", "rfc": "Q4"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.dropbox",
+      "title": "Dropbox status",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.dropbox"], "paths": ["shell/plugins/panels/dropbox/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "hosted when in bar.layout.right", "proposed": null, "approval": "open", "rfc": "Q2"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.tailscale",
+      "title": "Tailscale status",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.tailscale"], "paths": ["shell/plugins/panels/tailscale/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "hosted when in bar.layout.right", "proposed": null, "approval": "open", "rfc": "Q2"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/HostedIsland.qml"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.elsewhen",
+      "title": "World clock",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.elsewhen"], "paths": ["shell/plugins/panels/elsewhen/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade", "shortcuts.named-panels"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "opt-in via extraHosted", "proposed": null, "approval": "open", "rfc": "Q5"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/logic/Hosted.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.weather",
+      "title": "Weather",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.weather"], "paths": ["shell/plugins/panels/weather/manifest.json"], "api": []},
+      "depends_on": ["host.widget-facade", "shortcuts.named-panels"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "opt-in via extraHosted", "proposed": null, "approval": "open", "rfc": "Q5"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/logic/Hosted.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.system-update",
+      "title": "System update indicator",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.system-update"],
+        "paths": ["shell/plugins/bar/widgets/SystemUpdate.manifest.json"],
+        "api": []
+      },
+      "depends_on": ["host.widget-facade"],
+      "integration": {"current": "hosted", "intended": "pending-review"},
+      "placement": {"current": "opt-in via extraHosted", "proposed": null, "approval": "open", "rfc": "Q4"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/logic/Hosted.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.indicators",
+      "title": "Active-state indicators (DND, Night Light, stay awake, recording, remote session, reminder, passwordless sudo)",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.indicators"],
+        "paths": ["shell/plugins/bar/widgets/Indicators.manifest.json"],
+        "api": []
+      },
+      "depends_on": [],
+      "integration": {"current": "partial", "intended": "pending-review"},
+      "placement": {
+        "current": "not shown; 3 states as experimental Control Center toggles",
+        "proposed": null,
+        "approval": "open",
+        "rfc": "Q4"
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": ["plugin/widgets/ControlCenterView.qml", "plugin/logic/ControlCenter.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.nightlight",
+      "title": "Night Light service",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.nightlight"],
+        "paths": ["shell/plugins/services/nightlight/manifest.json"],
+        "api": ["firstPartyServiceFor(\"omarchy.nightlight\")"]
+      },
+      "depends_on": [],
+      "integration": {"current": "partial", "intended": "pending-review"},
+      "placement": {"current": "experimental Control Center toggle", "proposed": null, "approval": "open", "rfc": "Q7"},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["cc"],
+      "fi_files": ["plugin/logic/ControlCenter.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.idle",
+      "title": "Idle / stay-awake service",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.idle"],
+        "paths": ["shell/plugins/services/idle/manifest.json"],
+        "api": ["firstPartyServiceFor(\"omarchy.idle\")"]
+      },
+      "depends_on": [],
+      "integration": {"current": "partial", "intended": "pending-review"},
+      "placement": {"current": "experimental Control Center toggle", "proposed": null, "approval": "open", "rfc": "Q7"},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["cc"],
+      "fi_files": ["plugin/logic/ControlCenter.js"],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.notifications",
+      "title": "Notifications service (Do Not Disturb; no history)",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.notifications"],
+        "paths": ["shell/plugins/notifications/manifest.json"],
+        "api": ["firstPartyServiceFor(\"omarchy.notifications\")"]
+      },
+      "depends_on": [],
+      "integration": {"current": "partial", "intended": "pending-review"},
+      "placement": {"current": "experimental Control Center DND toggle", "proposed": null, "approval": "open", "rfc": "Q7"},
+      "compat": {"baseline": "ok", "trunk": "ok", "evidence": []},
+      "contract_areas": ["cc", "host"],
+      "fi_files": ["plugin/logic/ControlCenter.js"],
+      "blockers": [
+        {
+          "id": "no-history-api",
+          "summary": "No notification history API for bar plugins; blocks a native notification center",
+          "upstream_ref": null,
+          "watch": ["history", "notificationHistory"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    },
+    {
+      "id": "omarchy.remote-session",
+      "title": "Remote session service",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.remote-session"],
+        "paths": ["shell/plugins/services/remote-session/manifest.json"],
+        "api": []
+      },
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "pending-review"},
+      "placement": {"current": null, "proposed": null, "approval": "open", "rfc": "Q4"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.battery",
+      "title": "Battery service",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.battery"], "paths": ["shell/plugins/services/battery/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "delegated", "intended": "pending-review"},
+      "placement": {"current": "through hosted omarchy.power", "proposed": null, "approval": "open", "rfc": "Q4"},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.osd",
+      "title": "On-screen display",
+      "kind": "panel",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.osd"], "paths": ["shell/plugins/osd/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "delegated", "intended": "pending-review"},
+      "placement": {
+        "current": "summoned by stock widgets and clones",
+        "proposed": null,
+        "approval": "not-applicable",
+        "rfc": null
+      },
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [
+        {
+          "id": "service-less-facade",
+          "summary": "Hosted omarchy.monitor cannot summon it under a replacement bar",
+          "upstream_ref": "omacom/omarchy issue 13289",
+          "watch": ["pluginCloneMaySummon"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.speedtest",
+      "title": "Network speed test overlay",
+      "kind": "panel",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.speedtest"], "paths": ["shell/plugins/panels/speedtest/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "blocked", "intended": "pending-review"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [
+        {
+          "id": "service-less-facade",
+          "summary": "Only clones of omarchy.network may summon it under a replacement bar",
+          "upstream_ref": "omacom/omarchy issue 13289",
+          "watch": ["pluginCloneMaySummon"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.wifiqr",
+      "title": "Wi-Fi QR overlay",
+      "kind": "panel",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.wifiqr"], "paths": ["shell/plugins/panels/wifiqr/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "blocked", "intended": "pending-review"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [
+        {
+          "id": "service-less-facade",
+          "summary": "Only clones of omarchy.network may summon it under a replacement bar",
+          "upstream_ref": "omacom/omarchy issue 13289",
+          "watch": ["pluginCloneMaySummon"]
+        }
+      ],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.spacer",
+      "title": "Layout spacer",
+      "kind": "widget",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.spacer"], "paths": ["shell/plugins/bar/widgets/Spacer.manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.disk-speedtest",
+      "title": "Disk speed test panel",
+      "kind": "panel",
+      "origin": "baseline",
+      "upstream": {
+        "ids": ["omarchy.disk-speedtest"],
+        "paths": ["shell/plugins/panels/disk-speedtest/manifest.json"],
+        "api": []
+      },
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.dev-gallery",
+      "title": "Developer component gallery",
+      "kind": "panel",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.dev-gallery"], "paths": ["shell/plugins/dev-gallery/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.clipboard",
+      "title": "Clipboard overlay",
+      "kind": "overlay",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.clipboard"], "paths": ["shell/plugins/clipboard/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.emojis",
+      "title": "Emoji picker",
+      "kind": "overlay",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.emojis"], "paths": ["shell/plugins/emojis/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.image-picker",
+      "title": "Image picker",
+      "kind": "overlay",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.image-picker"], "paths": ["shell/plugins/image-picker/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.reminders",
+      "title": "Reminders overlay",
+      "kind": "overlay",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.reminders"], "paths": ["shell/plugins/reminders/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.background",
+      "title": "Wallpaper service",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.background"], "paths": ["shell/plugins/background/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.dock",
+      "title": "Dock",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.dock"], "paths": ["shell/plugins/dock/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.lock",
+      "title": "Lock screen",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.lock"], "paths": ["shell/plugins/lock/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.polkit",
+      "title": "Polkit agent",
+      "kind": "service",
+      "origin": "baseline",
+      "upstream": {"ids": ["omarchy.polkit"], "paths": ["shell/plugins/polkit/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "not-applicable"},
+      "placement": {"current": null, "proposed": null, "approval": "not-applicable", "rfc": null},
+      "compat": {"baseline": "ok", "trunk": "unknown", "evidence": []},
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    },
+    {
+      "id": "omarchy.local-models",
+      "title": "Local coding models service (new on trunk)",
+      "kind": "service",
+      "origin": "detected",
+      "upstream": {"ids": ["omarchy.local-models"], "paths": ["shell/plugins/local-models/manifest.json"], "api": []},
+      "depends_on": [],
+      "integration": {"current": "not-applicable", "intended": "pending-review"},
+      "placement": {"current": null, "proposed": null, "approval": "open", "rfc": null},
+      "compat": {
+        "baseline": "unknown",
+        "trunk": "changed",
+        "evidence": ["manifest added on trunk (upstream 3127619e, 5117642e)"]
+      },
+      "contract_areas": [],
+      "fi_files": [],
+      "blockers": [],
+      "issue": null,
+      "reviewed": "65d3982b3c435351d7d013674165c7c14b530226"
+    }
+  ]
+}

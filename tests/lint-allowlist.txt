@@ -1,0 +1,15 @@
+# qmllint findings that come from the environment, not from this code. Each
+# line is an extended regex matched against "file:line:col: message [category]"
+# with the line and column removed. Omarchy's own shell sources produce the
+# same findings under the same qmllint.
+
+# Quickshell registers PanelWindow's concrete type at runtime, so qmllint sees
+# only the uncreatable interface for a file whose root is a PanelWindow, and
+# then cannot resolve its `margins` group.
+^core/BarSurface\.qml: Type PanelWindow is not creatable\. \[uncreatable-type\]$
+^core/BarSurface\.qml: unknown grouped property scope margins\. \[unqualified\]$
+^core/BarSurface\.qml: Type margins is used but it is not resolved \[unresolved-type\]$
+
+# Commons.Color and Commons.Style expose their groups as `QtObject` properties
+# with inline members, which qmllint cannot see into.
+^theme/Theme\.qml: Member "(scale|text|background|family|border)" not found on type "QObject" \[missing-property\]$

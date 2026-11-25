@@ -1,0 +1,28 @@
+name: Feature request or design proposal
+description: Suggest an improvement, widget integration, or Control Center design idea.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What workflow or limitation does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe how it should look and behave, including keyboard interaction if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Omarchy compatibility & widget impact
+      description: Does this affect hosted stock widgets, third-party plugins, shortcuts (`SUPER+CTRL+1..9` / `SUPER+CTRL+ALT+*`), or require an upstream Omarchy API?
+  - type: textarea
+    id: references
+    attributes:
+      label: References (optional)
+      description: Links to related RFCs, discussions, or reference shells (note that GPL-3.0 references are concept-only for this MIT project).

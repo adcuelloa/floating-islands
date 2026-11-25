@@ -1,0 +1,350 @@
+# Runs the full automated test suite (tests/run-all.sh, stage by stage):
+#   - qa: runs in a digest-pinned Arch container with SHA-256-verified packages.
+#   - sandbox: runs natively on ubuntu-24.04 using Ubuntu's unmodified distro
+#     bwrap-userns-restrict AppArmor profile (keeping global unprivileged userns
+#     restrictions intact) and SHA-256-verified staged Omarchy scripts/metadata.
+#
+# Security posture: no secrets, read-only GITHUB_TOKEN, persist-credentials: false,
+# SHA-pinned actions, no actions/cache, no pull_request_target. Because PR-controlled
+# bootstrap scripts run with privileges inside ephemeral runners, external contributor
+# pull requests require manual maintainer workflow approval AND code inspection of
+# untrusted executable changes before running CI.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The Arch Linux Archive date the image was built from; every Arch package
+  # comes from it. Pinned non-Arch artifacts live in .github/ci/bootstrap.sh.
+  ARCH_ARCHIVE_DATE: "2026/11/01"
+  CI_USER: ci
+  CI_UID: "1001"
+  XDG_RUNTIME_DIR: /run/user/1001
+  LOGS: /tmp/ci-logs
+
+jobs:
+  qa:
+    name: qa (validate, imports, qmllint, contract, node, qml, privacy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: archlinux:base-20261101.0.620205@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
+    steps:
+      - name: Point pacman at the archive date and install git
+        timeout-minutes: 8
+        run: |
+          echo "Server = https://archive.archlinux.org/repos/$ARCH_ARCHIVE_DATE/\$repo/os/\$arch" >/etc/pacman.d/mirrorlist
+          # Pre-checkout step cannot source .github/ci/retry.sh yet: mirror its
+          # bounded retry, process-group timeout escalation (timeout -k 10),
+          # safe stale-lock recovery (only when no lock existed beforehand and
+          # no pacman process remains active), and strict fatal vs. transient
+          # classification.
+          pacman_is_active() {
+            local proc_comm pid comm stat state
+            for proc_comm in /proc/[0-9]*/comm; do
+              [[ -r $proc_comm ]] || continue
+              IFS= read -r comm <"$proc_comm" 2>/dev/null || continue
+              if [[ $comm == "pacman" ]]; then
+                pid=${proc_comm#/proc/}
+                pid=${pid%/comm}
+                stat=$(cat "/proc/$pid/stat" 2>/dev/null) || continue
+                state=${stat##*) }
+                state=${state%% *}
+                [[ $state != Z ]] && return 0
+              fi
+            done
+            return 1
+          }
+          pacman_recover_stale_lock() {
+            local lock_file=$1 had_preexisting=$2 rc=$3 i
+            [[ ! -e $lock_file && ! -L $lock_file ]] && return 0
+            if (( had_preexisting )); then
+              echo "::error::pacman lock $lock_file existed prior to timed-out attempt (rc=$rc); refusing to remove" >&2
+              return 1
+            fi
+            if [[ -L $lock_file || ! -f $lock_file ]]; then
+              echo "::error::pacman lock $lock_file is not a regular file (rc=$rc); refusing to remove" >&2
+              return 1
+            fi
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! pacman_is_active; then
+                rm -f -- "$lock_file"
+                echo "::warning::removed stale pacman lock $lock_file left by timed-out CI attempt (rc=$rc)" >&2
+                return 0
+              fi
+              sleep 0.2
+            done
+            echo "::error::pacman transaction still active after timeout (rc=$rc); refusing to remove $lock_file" >&2
+            return 1
+          }
+          lock_file=/var/lib/pacman/db.lck
+          deadline=$(( $(date +%s) + 360 ))
+          backoffs=(10 20 40)
+          max_attempts=$(( ${#backoffs[@]} + 1 ))
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+          attempt=1
+          while (( attempt <= max_attempts )); do
+            remaining=$(( deadline - $(date +%s) ))
+            if (( remaining < 20 )); then
+              echo "::error::pacman git install overall deadline reached" >&2
+              exit 1
+            fi
+            cap=180
+            (( remaining < cap )) && cap=$remaining
+            had_preexisting_lock=0
+            [[ -e $lock_file || -L $lock_file ]] && had_preexisting_lock=1
+            : >"$log"
+            rc=0
+            start_s=$(date +%s)
+            timeout -k 10 "$cap" pacman --disable-download-timeout -Syu --noconfirm --needed git 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+            elapsed=$(( $(date +%s) - start_s ))
+            if (( rc == 0 )); then
+              exit 0
+            fi
+            timed_out=0
+            if (( rc == 124 )) || (( rc == 137 && elapsed >= cap )); then
+              timed_out=1
+            fi
+            if (( timed_out )); then
+              if ! pacman_recover_stale_lock "$lock_file" "$had_preexisting_lock" "$rc"; then
+                exit "$rc"
+              fi
+            fi
+            if grep -qiE 'invalid or corrupted (package|database)|pgp signature|signature from .* is|could not be verified|checksum|missing signature|conflicting files|target not found|returned error: 404|404 not found|could not satisfy dependencies|are in conflict|breaks dependency' "$log"; then
+              echo "::error::pacman git install failed with non-retryable integrity/package error (rc=$rc)" >&2
+              exit "$rc"
+            fi
+            if (( ! timed_out )) && ! grep -qiE 'connection timed out|operation timed out|operation too slow|resolving timed out|could not resolve host|failed to connect|connection reset by peer|ssl connection timeout|tls connect error|empty reply from server|returned error: (408|429|500|502|503|504)|recv failure|send failure|transferred a partial file|failed retrieving file' "$log"; then
+              echo "::error::pacman git install failed with non-transport error (rc=$rc)" >&2
+              exit "$rc"
+            fi
+            if (( attempt == max_attempts )); then
+              echo "::error::pacman git install transient transport failure persisted after ${max_attempts} attempts (rc=$rc)" >&2
+              exit "$rc"
+            fi
+            wait_s=${backoffs[$((attempt - 1))]}
+            remaining=$(( deadline - $(date +%s) ))
+            if (( remaining <= wait_s + 20 )); then
+              echo "::error::pacman git install transient failure (rc=$rc) and overall deadline reached" >&2
+              exit "$rc"
+            fi
+            echo "::warning::pacman git install transient transport failure (attempt ${attempt}/${max_attempts}, rc=$rc); retrying in ${wait_s}s" >&2
+            sleep "$wait_s"
+            attempt=$(( attempt + 1 ))
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bootstrap pinned environment
+        id: bootstrap
+        timeout-minutes: 15
+        run: |
+          .github/ci/bootstrap.sh "$CI_USER" "$CI_UID"
+          mkdir -p "$LOGS"
+          { pacman -Q omarchy quickshell qt6-base qt6-declarative nodejs fontconfig noto-fonts; node --version; uname -r; } | tee "$LOGS/environment.log"
+
+      - name: omarchy plugin validate
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          stage=$(runuser -u "$CI_USER" -- mktemp -d)
+          id=$(jq -r .id plugin/manifest.json)
+          runuser -u "$CI_USER" -- cp -R plugin "$stage/$id"
+          runuser -u "$CI_USER" -- /usr/share/omarchy/bin/omarchy-plugin-validate "$stage/$id" 2>&1 | tee "$LOGS/validate.log"
+      - name: imports
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- tests/imports.sh 2>&1 | tee "$LOGS/imports.log"
+      - name: qmllint
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: runuser -u "$CI_USER" -- tests/lint.sh 2>&1 | tee "$LOGS/qmllint.log"
+      - name: compatibility contract
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- tests/contract/check-contract.sh 2>&1 | tee "$LOGS/contract.log"
+      - name: contract self-test
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: runuser -u "$CI_USER" -- tests/contract/self-test.sh 2>&1 | tee "$LOGS/self-test.log"
+      - name: unit tests (node)
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: runuser -u "$CI_USER" -- node --test --test-reporter=tap tests/unit/*.test.mjs 2>&1 | tee "$LOGS/node.log"
+      - name: component tests (qmltestrunner, offscreen)
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 10
+        run: runuser -u "$CI_USER" -- tests/qml/run.sh 2>&1 | tee "$LOGS/qml.log"
+      - name: privacy
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- tests/privacy.sh 2>&1 | tee "$LOGS/privacy.log"
+      - name: count-guard self-test
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- .github/ci/counts.test.sh 2>&1 | tee "$LOGS/counts-self-test.log"
+      - name: retry helper self-test
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: runuser -u "$CI_USER" -- .github/ci/retry.test.sh 2>&1 | tee "$LOGS/retry-self-test.log"
+      - name: test counts
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: .github/ci/counts.sh "$LOGS" node=117 qml=263 contract=241
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: qa-logs
+          path: /tmp/ci-logs
+          retention-days: 7
+          if-no-files-found: warn
+
+  sandbox:
+    name: sandbox (install / settings / rollback, bubblewrap)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Install bubblewrap, AppArmor profiles, and staging tools
+        timeout-minutes: 5
+        run: |
+          mkdir -p "$LOGS"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles libarchive-tools
+      # Load Ubuntu's unmodified distro-provided bwrap-userns-restrict AppArmor
+      # profile (scoped to /usr/bin/bwrap only; global unprivileged userns
+      # restrictions remain unchanged) and run a fail-closed preflight using the
+      # exact bubblewrap flags required by tests/scripts/isolated.sh.
+      - name: Configure AppArmor profile and preflight unprivileged bubblewrap
+        timeout-minutes: 2
+        run: |
+          mkdir -p "$LOGS"
+          {
+            echo "=== host identity ==="
+            uname -a
+            id
+            grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release || true
+            bwrap --version
+
+            echo "=== apparmor & userns state (before) ==="
+            if ! sudo aa-enabled; then
+              echo "::error title=sandbox BLOCKED::AppArmor is not enabled on this runner; refusing to proceed"
+              exit 1
+            fi
+            userns_before=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+            echo "kernel.apparmor_restrict_unprivileged_userns=$userns_before"
+            if [[ $userns_before != "1" ]]; then
+              echo "::error title=sandbox BLOCKED::expected kernel.apparmor_restrict_unprivileged_userns=1 before profile load, got $userns_before"
+              exit 1
+            fi
+            if [[ -r /proc/sys/kernel/unprivileged_userns_clone ]]; then
+              echo "kernel.unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone)"
+            fi
+
+            echo "=== check existing/conflicting bwrap profiles ==="
+            if grep -rn '/usr/bin/bwrap' /etc/apparmor.d/ 2>/dev/null; then
+              echo "::error title=sandbox BLOCKED::existing or conflicting AppArmor profile targets /usr/bin/bwrap"
+              exit 1
+            fi
+            if sudo aa-status | grep -E '(^|[[:space:]])(bwrap|unpriv_bwrap|/usr/bin/bwrap)([[:space:]]|$)'; then
+              echo "::error title=sandbox BLOCKED::a bwrap AppArmor profile is already loaded"
+              exit 1
+            fi
+
+            profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+            if [[ ! -f $profile_src ]]; then
+              echo "::error title=sandbox BLOCKED::distro profile $profile_src not found"
+              exit 1
+            fi
+            echo "=== distro profile identity ==="
+            sha256sum "$profile_src"
+            cat "$profile_src"
+            if ! grep -q '/usr/bin/bwrap' "$profile_src" || ! grep -q 'unpriv_bwrap' "$profile_src"; then
+              echo "::error title=sandbox BLOCKED::distro profile $profile_src does not match expected bwrap-userns-restrict structure"
+              exit 1
+            fi
+
+            echo "=== load unmodified distro profile ==="
+            sudo install -m 0644 "$profile_src" /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            sudo aa-status | grep -E 'bwrap|unpriv_bwrap'
+
+            userns_after=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+            echo "kernel.apparmor_restrict_unprivileged_userns(after)=$userns_after"
+            if [[ $userns_after != "1" || $userns_after != "$userns_before" ]]; then
+              echo "::error title=sandbox BLOCKED::expected kernel.apparmor_restrict_unprivileged_userns=1 after profile load, got $userns_after"
+              exit 1
+            fi
+
+            uid=$(id -u)
+            gid=$(id -g)
+            sudo install -d -m 700 -o "$uid" -g "$gid" "/run/user/$uid"
+
+            echo "=== preflight unprivileged bwrap (isolated.sh flags + fd 9) ==="
+            probe_log=$(mktemp /tmp/islands-preflight.XXXXXX)
+            trap 'rm -f "$probe_log"' EXIT
+            exec 9>>"$probe_log"
+
+            run_probe() {
+              bwrap --ro-bind / / --dev /dev --proc /proc \
+                --tmpfs /tmp --tmpfs "/run/user/$uid" \
+                --unshare-ipc --unshare-net --unshare-pid --new-session --die-with-parent \
+                --clearenv \
+                --setenv HOME "$HOME" --setenv PATH "$PATH" --setenv USER "${USER:-}" \
+                --setenv LANG "${LANG:-C.UTF-8}" --setenv TERM dumb \
+                "$@" </dev/null
+            }
+
+            if ! run_probe /bin/true; then
+              echo "::error title=sandbox BLOCKED::unprivileged bwrap failed to run /bin/true under bwrap-userns-restrict"
+              exit 1
+            fi
+            if ! run_probe /bin/sh -c '
+              test ! -w /usr &&
+              : > /tmp/.bwrap-rw &&
+              : > "'"/run/user/$uid"'/.bwrap-rw" &&
+              echo "preflight-fd9-ok" >&9
+            '; then
+              echo "::error title=sandbox BLOCKED::unprivileged bwrap failed ro-root / tmpfs / fd-9 probe"
+              exit 1
+            fi
+            if ! grep -qx 'preflight-fd9-ok' "$probe_log"; then
+              echo "::error title=sandbox BLOCKED::fd 9 did not report to parent-owned log"
+              exit 1
+            fi
+            echo "preflight: PASS (bwrap-userns-restrict active, namespaces/ro-root/tmpfs/fd-9 verified)"
+          } 2>&1 | tee "$LOGS/preflight.log"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stage verified upstream artifacts
+        timeout-minutes: 10
+        run: sudo .github/ci/bootstrap-sandbox.sh 2>&1 | tee "$LOGS/bootstrap-sandbox.log"
+      - name: install / settings / rollback (sandbox, isolated)
+        timeout-minutes: 10
+        run: tests/scripts/isolated.sh tests/scripts/sandbox.test.sh 2>&1 | tee "$LOGS/sandbox.log"
+      - name: test counts
+        run: .github/ci/counts.sh "$LOGS" sandbox=132
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: sandbox-logs
+          path: /tmp/ci-logs
+          retention-days: 7
+          if-no-files-found: warn

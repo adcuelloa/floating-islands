@@ -1,0 +1,296 @@
+# Upstream symbols this bar depends on, checked against the installed Omarchy
+# shell and Quickshell type information. One line per dependency:
+#   area <TAB> file <TAB> F|E <TAB> pattern <TAB> what breaks without it
+# F = fixed string, E = extended regex. $OMARCHY is $OMARCHY_PATH
+# (/usr/share/omarchy), $QS is the Quickshell QML module directory.
+# Only what the code actually uses is listed, so unrelated upstream changes
+# do not fail the check.
+# One symbol per line: a regex alternation may spell one dependency two ways
+# (e.g. composed|pick), never list several symbols, or the row would pass
+# while one of them is gone.
+# A trailing ? (F?, E?) marks a conditional dependency: only an opt-in feature
+# uses it (the experimental Control Center, bar.islands.controlCenter). It
+# still fails the check; check-contract.sh --advisory reports it as WARN.
+
+# --- manifest and bar selection
+manifest	$OMARCHY/bin/omarchy-plugin-validate	F	'.schemaVersion == 1'	manifest schemaVersion 1 accepted
+manifest	$OMARCHY/bin/omarchy-plugin-validate	F	uses the reserved omarchy.* namespace	third-party ids must avoid omarchy.*
+selection	$OMARCHY/shell/shell.qml	F	var configured = Util.canonicalWidgetId(String(config.id || ""))	bar.id in shell.json selects the bar
+selection	$OMARCHY/shell/shell.qml	E	manifest\.kinds\.indexOf\("bar"\) !== -1	kind "bar" makes a plugin a bar option
+selection	$OMARCHY/shell/shell.qml	F	&& manifest.entryPoints.bar	entryPoints.bar is the entry point
+selection	$OMARCHY/bin/omarchy-bar	F	commit "$NORMALIZE | .bar.id = \$plugin" --arg plugin "$plugin"	omarchy bar use writes bar.id
+selection	$OMARCHY/bin/omarchy-bar	F	commit "$NORMALIZE | del(.bar.id)"	omarchy bar reset deletes bar.id (rollback)
+selection	$OMARCHY/bin/omarchy-shell-config	F	CONFIG_FILE="$HOME/.config/omarchy/shell.json"	rollback edits this file
+
+# --- settings persistence: shell-side edits keep keys they do not know
+settings	$OMARCHY/shell/shell.qml	F	var copy = JSON.parse(JSON.stringify(shellConfig || builtinShellConfig))	shell-side edits (bar move/set, drags) copy the whole config, keeping bar.islands
+settings	$OMARCHY/shell/shell.qml	F	pluginRegistry.shellConfigMutator = function(mutate) { shell.mutateShellConfig(mutate) }	moveBarWidget goes through that copy
+settings	$OMARCHY/shell/shell.qml	F	if (Util.isPlainObject(scoped.bar)) config.bar = JSON.parse(JSON.stringify(scoped.bar))	a bar plugin may rewrite the bar subtree (trial end)
+settings	$OMARCHY/shell/services/PluginShellApi.qml	F	function mutateShellConfig(mutator) {	scoped mutateShellConfig
+settings	$OMARCHY/shell/shell.qml	F	return hasCurrentBarCapabilities() ? shell.mutatePluginBarConfig(mutator) : false	only bar plugins may (and this is one)
+settings	$OMARCHY/bin/omarchy-shell-config	F	| .bar = (.bar | object_or_empty)	CLI NORMALIZE keeps unknown bar keys (functional test: tests/scripts)
+
+# --- lifecycle
+lifecycle	$OMARCHY/shell/shell.qml	F	id: pluginBarLoader	plugin bars load through their own Loader
+lifecycle	$OMARCHY/shell/shell.qml	F	shell.failedBarId = shell.activeBarId	a load error falls back to the stock bar
+lifecycle	$OMARCHY/shell/shell.qml	F	active: !shell.pluginReloading && shell.activeBarId !== shell.defaultBarId	hot reload rebuilds the bar (no in-memory state kept)
+lifecycle	$OMARCHY/shell/shell.qml	F	shell.bar = target	the loaded bar is published as shell.bar
+
+# --- injected properties (shell.qml configureBar)
+inject	$OMARCHY/shell/shell.qml	F	if ("shell" in target) target.shell = shell.pluginShellFor(manifest)	Bar.shell
+inject	$OMARCHY/shell/shell.qml	F	if ("manifest" in target) target.manifest = shell.publicPluginManifest(manifest)	Bar.manifest (plugin id)
+inject	$OMARCHY/shell/shell.qml	F	if ("barWidgetRegistry" in target) target.barWidgetRegistry = shell.pluginBarWidgetRegistryFor(manifest)	Bar.barWidgetRegistry (hosted widgets)
+inject	$OMARCHY/shell/shell.qml	F	if ("barConfig" in target) target.barConfig = shell.barConfigFor(manifest)	Bar.barConfig (settings, layout)
+inject	$OMARCHY/shell/shell.qml	F	bar.barConfig = shell.barConfigFor(shell.activeBarManifest)	barConfig is re-injected on shell.json reload
+
+# --- host contract: what the shell and its plugins read from the active bar
+host	$OMARCHY/shell/shell.qml	F	shell.bar ? shell.bar.barHidden === true : false	Bar.barHidden
+host	$OMARCHY/shell/shell.qml	F	Math.max(0, shell.bar.barSize || 0)	Bar.barSize
+host	$OMARCHY/shell/shell.qml	F	shell.detachedBarSizes(shell.bar.screenBarSizes)	Bar.screenBarSizes
+host	$OMARCHY/shell/shell.qml	F	String(shell.bar.fontFamily || "")	Bar.fontFamily
+host	$OMARCHY/shell/shell.qml	F	String(shell.bar.position || "top")	Bar.position
+host	$OMARCHY/shell/plugins/notifications/Delivery.js	F	bar.barSizeFor(screenName)	toasts clear the bar by barSizeFor()
+host	$OMARCHY/shell/shell.qml	F	typeof shell.bar.summonBarWidget === "function"	Bar.summonBarWidget (optional verb)
+host	$OMARCHY/shell/shell.qml	F	typeof shell.bar.hideBarWidget === "function"	Bar.hideBarWidget (optional verb)
+host	$OMARCHY/shell/shell.qml	F	typeof shell.bar.isBarWidgetOpen === "function"	Bar.isBarWidgetOpen (optional verb)
+host	$OMARCHY/shell/shell.qml	F	typeof shell.bar.panelWidgetIdAt === "function"	Bar.panelWidgetIdAt (optional verb)
+host	$OMARCHY/shell/shell.qml	F	shell.bar.debugBarGeometry ? shell.bar.debugBarGeometry() : []	Bar.debugBarGeometry (diagnostics)
+
+# --- stock widget routes: named panel hotkeys reach the bar through these
+routes	$OMARCHY/shell/shell.qml	F	&& shell.bar.summonBarWidget(id)	shell summon of a bar widget goes to Bar.summonBarWidget (logic/Routes.js)
+routes	$OMARCHY/shell/shell.qml	F	&& shell.bar.hideBarWidget(id)	shell hide goes to Bar.hideBarWidget
+routes	$OMARCHY/shell/shell.qml	F	? shell.bar.isBarWidgetOpen(id)	shell isPluginOpen goes to Bar.isBarWidgetOpen
+routes	$OMARCHY/shell/shell.qml	F	return isPluginOpen(id) ? hide(id) : summon(id, payloadJson)	toggle is isOpen ? hide : summon (calendar open on any output counts)
+routes	$OMARCHY/default/hypr/bindings/utilities.lua	F	{ panel = "omarchy.clock" }	SUPER+CTRL+ALT+D Calendar names omarchy.clock (routed to the native calendar)
+routes	$OMARCHY/default/hypr/bindings/utilities.lua	F	{ panel = "omarchy.elsewhen" }	SUPER+CTRL+ALT+E World clock names omarchy.elsewhen (reachable via extraHosted)
+routes	$OMARCHY/bin/omarchy-notification-weather	F	omarchy-shell shell toggle omarchy.weather	SUPER+CTRL+ALT+W Weather toggles omarchy.weather (reachable via extraHosted)
+routes	$OMARCHY/default/hypr/bindings/utilities.lua	F	"omarchy-shell -q shell togglePanelAt right " .. panel	SUPER+CTRL+1..9 count the right section (extraHosted ids take no number)
+
+# --- panel hand-over: one click on another bar widget while a panel is open
+handover	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	var targets = root.bar.clickTargets	an open panel forwards bar-strip clicks only to its bar's clickTargets
+handover	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	target.triggerPress(button)	forwarded through triggerPress (ClockIsland's clockButton has one)
+handover	$OMARCHY/shell/plugins/bar/Bar.qml	F	if ("bar" in target) target.bar = firstParty	stock bar: first-party widgets see every target, plugins a scoped API (mirrored in WidgetHosting.seesAllTargets)
+handover	$OMARCHY/shell/shell.qml	F	firstParty: !!manifest.__isFirstParty	the registry metadata carries firstParty
+handover	$OMARCHY/shell/services/PluginRegistry.qml	E	manifest\.__isFirstParty = \((currentKind|kind) === "firstparty"\)	firstParty comes from the scan's firstparty/thirdparty framing, not from a plugin's own manifest (the local was renamed currentKind -> kind upstream; a manifest field would not match)
+
+# --- services reached through the scoped shell API
+service	$OMARCHY/shell/services/PluginShellApi.qml	F	function toggle(id, payloadJson)	launcher toggles omarchy.menu
+service	$OMARCHY/shell/shell.qml	F	var uiKinds = ["bar-widget", "panel", "overlay", "menu"]	a bar plugin may toggle menu plugins
+service	$OMARCHY/shell/services/PluginShellApi.qml	F	function pluginShellForBarEntry(ownerId, moduleName)	hosted widgets get an entry facade
+service	$OMARCHY/shell/shell.qml	F	if (!shell.barEntryConfigured(target)) return null	hosted widgets must stay in bar.layout
+service	$OMARCHY/shell/plugins/menu/manifest.json	F	"id": "omarchy.menu"	the launcher's target exists
+
+# --- widget hosting (public widget contract)
+widgets	$OMARCHY/shell/Ui/qmldir	E	^PluginBarApi 1\.0 PluginBarApi\.qml$	HostedBarApi extends PluginBarApi
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _showTooltip: null	facade callback _showTooltip (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _hideTooltip: null	facade callback _hideTooltip (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _registerClickTarget: null	facade callback _registerClickTarget (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _unregisterClickTarget: null	facade callback _unregisterClickTarget (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _requestPopout: null	facade callback _requestPopout (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _releasePopout: null	facade callback _releasePopout (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _switchPanelFrom: null	facade callback _switchPanelFrom (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _notePopoutCard: null	facade callback _notePopoutCard (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _popoutCardFor: null	facade callback _popoutCardFor (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _targetBelongsToWindow: null	facade callback _targetBelongsToWindow (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _moduleWidgets: null	facade callback _moduleWidgets (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _run: null	facade callback _run (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var _setCenterHoverRevealSuppressed: null	facade callback _setCenterHoverRevealSuppressed (WidgetHosting sets it at creation and nulls it in retire())
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	property var clickTargets: []	facade clickTargets
+widgets	$OMARCHY/shell/Ui/PluginBarApi.qml	F	readonly property var foreignPopoutMarker: ({ foreign: true })	facade popout marker
+widgets	$OMARCHY/shell/services/PluginBarWidgetRegistryApi.qml	F	property var widgets: ({})	registry snapshot
+widgets	$OMARCHY/shell/shell.qml	F	component: entry.component,	snapshot entries carry the widget Component
+widgets	$OMARCHY/shell/shell.qml	F	var api = pluginBarWidgetRegistryApiComponent.createObject(null, {	snapshot created per bar (null components after a bar swap; logic/Hosted.js covers it)
+widgets	$OMARCHY/shell/shell.qml	F	widgetApi.widgets = shell.publicBarWidgetSnapshot()	snapshot refreshed on every registry change
+widgets	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	typeof bar.barSizeFor === "function"	hosted panels clear the islands via barSizeFor
+widgets	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	root.bar.targetBelongsToWindow(target, root.anchorWindow)	click-target forwarding
+
+# --- media (Milestone 2: the native media island reads Omarchy's media service)
+media	$OMARCHY/shell/shell.qml	F	var serviceIds = ["omarchy.idle", "omarchy.media", "omarchy.nightlight", "omarchy.notifications", "omarchy.remote-session"]	bar plugins get the media service proxy
+media	$OMARCHY/shell/services/PluginShellApi.qml	F	function firstPartyServiceFor(id) {	firstPartyServiceFor on the scoped shell
+media	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F	property var activePlayer: null	the service's chosen player
+media	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F	function runAction(action, showFeedback, playerId) {	controls go through the service
+media	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F	function playerKey(player) {	actions target the shown player
+media	$OMARCHY/shell/shell.qml	F	return target ? target.activePlayer : null	activePlayer is proxied live
+media	$OMARCHY/shell/plugins/services/media/Service.qml	F	action === "next"	media action next the island sends
+media	$OMARCHY/shell/plugins/services/media/Service.qml	F	action === "previous"	media action previous the island sends
+media	$OMARCHY/shell/plugins/services/media/Service.qml	F	action === "playPause"	media action playPause the island sends
+media	$OMARCHY/shell/plugins/services/media/manifest.json	F	"id": "omarchy.media"	the media service exists
+
+# --- calendar (Milestone 2: built on Omarchy's KeyboardPanel)
+panel	$OMARCHY/shell/Ui/qmldir	E	^KeyboardPanel 1\.0 KeyboardPanel\.qml$	the calendar popover
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	required property Item anchorItem	given at construction (setSource)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	required property QtObject bar	given at construction (setSource)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property var owner	KeyboardPanel.owner (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property bool centerOnBar	KeyboardPanel.centerOnBar (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property int padding	KeyboardPanel.padding (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property Item focusTarget	KeyboardPanel.focusTarget (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property Component content	KeyboardPanel.content (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property bool open	KeyboardPanel.open (calendar and Control Center set or read it)
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	function fittedContentWidth(	KeyboardPanel.fittedContentWidth sizing helper
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	function fittedContentHeight(	KeyboardPanel.fittedContentHeight sizing helper
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	readonly property Item loadedContent: contentLoader.item	reset on open
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	if (owner && "close" in owner) owner.close()	outside click closes through the clock island
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	bar.requestPopout(coordinatorKey)	one panel at a time with hosted widgets
+panel	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	if (!target || !target.triggerPress	clicking the clock while open toggles it
+
+# --- theme
+theme	$OMARCHY/shell/Commons/qmldir	E	^singleton Color 1\.0 Color\.qml$	Commons.Color
+theme	$OMARCHY/shell/Commons/qmldir	E	^singleton Style 1\.0 Style\.qml$	Commons.Style
+theme	$OMARCHY/shell/Commons/Color.qml	E	^[[:blank:]]{0,2}property color background:	Color.background palette role (theme/Theme.qml)
+theme	$OMARCHY/shell/Commons/Color.qml	E	^[[:blank:]]{0,2}property color accent:	Color.accent palette role (theme/Theme.qml)
+theme	$OMARCHY/shell/Commons/Color.qml	E	^[[:blank:]]{0,2}property color urgent:	Color.urgent palette role (theme/Theme.qml)
+theme	$OMARCHY/shell/Commons/Color.qml	E	^[[:blank:]]{0,2}property color muted:	Color.muted palette role (theme/Theme.qml)
+theme	$OMARCHY/shell/Commons/Color.qml	F	readonly property QtObject bar: QtObject {	Color.bar group
+theme	$OMARCHY/shell/Commons/Color.qml	F	property color background: root.composed("bar.background"	Color.bar.background
+theme	$OMARCHY/shell/Commons/Color.qml	F	property color text: root.pick("bar.text", root.foreground)	Color.bar.text
+theme	$OMARCHY/shell/Commons/Color.qml	F	Runtime theme switches push the payload explicitly	live theme switching
+theme	$OMARCHY/shell/Commons/Color.qml	F	readonly property QtObject popups: QtObject {	Color.popups group (Theme.card)
+theme	$OMARCHY/shell/Commons/Color.qml	F	property color background: root.composed("popups.background"	Color.popups.background (Theme.card, panel contrast)
+theme	$OMARCHY/shell/Commons/Color.qml	F	readonly property QtObject tooltip: QtObject {	tooltip colours
+theme	$OMARCHY/shell/Commons/Color.qml	E	property color background: root\.(composed|pick)\("tooltip\.background	Color.tooltip.background
+theme	$OMARCHY/shell/Commons/Color.qml	E	property color text: root\.(composed|pick)\("tooltip\.text	Color.tooltip.text
+theme	$OMARCHY/shell/Commons/Color.qml	E	property color border: root\.(composed|pick)\("tooltip\.border	Color.tooltip.border
+theme	$OMARCHY/shell/Commons/Style.qml	F	function duration(ms) {	Style.duration (reduced motion)
+theme	$OMARCHY/shell/Commons/Style.qml	F	return reduceMotion ? 0 : ms	durations collapse with animations off
+theme	$OMARCHY/shell/Commons/Style.qml	F	readonly property var easeOut:	Style.easeOut
+theme	$OMARCHY/shell/Commons/Style.qml	F	readonly property real scale: root.effectiveSpacingScale	Style.spacing.scale
+theme	$OMARCHY/shell/Commons/Style.qml	F	readonly property real fontScale:	Style.fontScale
+theme	$OMARCHY/shell/Commons/Style.qml	F	readonly property string family: root.fontFamily	Style.font.family
+
+# --- commons helpers
+commons	$OMARCHY/shell/Commons/Util.qml	F	function execArgv(argv) {	argv exec without a shell
+commons	$OMARCHY/shell/Commons/Util.qml	F	function execDetached(command) {	PluginBarApi.run for hosted widgets
+commons	$OMARCHY/shell/Commons/Util.qml	F	function wheelSteps(accumulator, delta) {	workspace scrolling
+commons	$OMARCHY/shell/Commons/I18n.qml	F	readonly property string formatLocale:	clock follows the Omarchy language
+commons	$OMARCHY/shell/Commons/qmldir	E	^Translations 1\.0 Translations\.qml$	string catalogs
+commons	$OMARCHY/shell/Commons/Translations.qml	F	property var directory:	Translations.directory
+commons	$OMARCHY/shell/Commons/qmldir	E	^ShellIpc 1\.0 ShellIpc\.qml$	IPC handlers
+commons	$OMARCHY/shell/Ui/qmldir	E	^ScreenMoveRemap 1\.0 ScreenMoveRemap\.qml$	output-move guard
+
+# --- Hyprland integration
+hyprland	$OMARCHY/default/hypr/monitor-workspaces.lua	F	function M.focus(slot, monitor_name)	workspace click dispatch
+hyprland	$OMARCHY/default/hypr/monitor-workspaces.lua	F	o.workspaces = M	o.workspaces namespace
+hyprland	$OMARCHY/default/hypr/monitor-workspaces.lua	F	local STATE_FILE = STATE_DIR .. "/monitor-workspaces"	per-monitor workspace blocks
+hyprland	$OMARCHY/default/hypr/apps/omarchy-shell.lua	F	namespace = "omarchy-bar"	layer rules apply to our namespace
+hyprland	$OMARCHY/bin/omarchy-toggle-bar	F	omarchy-shell -q omarchy.bar syncHidden	bar-off nudge reaches our ShellIpc
+hyprland	$OMARCHY/bin/omarchy-toggle-bar	F	omarchy-toggle bar-off	bar-off flag name
+
+# --- Quickshell types (installed type information)
+quickshell	$QS/quickshell-core.qmltypes	F	exports: ["Quickshell/Region 0.0"]	input mask
+quickshell	$QS/quickshell-core.qmltypes	E	name: "regions"	nested mask regions
+quickshell	$QS/quickshell-core.qmltypes	F	exports: ["Quickshell/SystemClock 0.0"]	clock
+quickshell	$QS/quickshell-core.qmltypes	F	exports: ["Quickshell/Scope 0.0"]	adapters
+quickshell	$QS/quickshell-core.qmltypes	F	exports: ["Quickshell/Variants 0.0"]	one surface per output
+quickshell	$QS/quickshell-core.qmltypes	E	name: "screens"	Quickshell.screens (multi-output)
+quickshell	$QS/_Window/quickshell-window.qmltypes	E	name: "exclusiveZone"	exclusive zone
+quickshell	$QS/_Window/quickshell-window.qmltypes	E	name: "exclusionMode"	hide toggle
+quickshell	$QS/Wayland/_WlrLayerShell/quickshell-wayland-layershell.qmltypes	F	exports: ["Quickshell.Wayland._WlrLayerShell/WlrLayershell 0.0"]	layer-shell attached properties
+quickshell	$QS/Wayland/_WlrLayerShell/quickshell-wayland-layershell.qmltypes	F	name: "namespace"	WlrLayershell.namespace
+quickshell	$QS/Wayland/_WlrLayerShell/quickshell-wayland-layershell.qmltypes	F	name: "keyboardFocus"	WlrLayershell.keyboardFocus
+quickshell	$QS/Wayland/_WlrLayerShell/quickshell-wayland-layershell.qmltypes	F	name: "layer"	WlrLayershell.layer
+quickshell	$QS/Hyprland/_Ipc/quickshell-hyprland-ipc.qmltypes	E	name: "activeToplevel"	title island
+quickshell	$QS/Hyprland/_Ipc/quickshell-hyprland-ipc.qmltypes	E	name: "monitorFor"	per-output adapters
+quickshell	$QS/Hyprland/_Ipc/quickshell-hyprland-ipc.qmltypes	E	name: "refreshWorkspaces"	workspace refresh
+quickshell	$QS/Hyprland/_Ipc/quickshell-hyprland-ipc.qmltypes	E	name: "toplevels"	workspace occupancy
+quickshell	$QS/Io/quickshell-io.qmltypes	E	"Quickshell.Io/FileView	state files
+quickshell	$QS/Io/quickshell-io.qmltypes	E	"Quickshell.Io/Process	bar-off probe
+geometry	$OMARCHY/shell/Commons/Style.qml	F	gapsOut = Math.max(0, Math.round(n / 2))	Style.gapsOut is half of gaps_out (panelBarSize compensates it)
+geometry	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	property int gap: Style.gapsOut	panels add Style.gapsOut to barSizeFor
+geometry	$OMARCHY/shell/Ui/KeyboardPanel.qml	F	y = barThickness + gap	top panels sit at barSizeFor + gap
+quickshell	$QS/quickshell-core.qmltypes	F	exports: ["Quickshell/DesktopEntries 0.0"]	title app icon (desktop entries)
+quickshell	$QS/quickshell-core.qmltypes	F	name: "heuristicLookup"	title app icon (window to entry)
+quickshell	$QS/quickshell-core.qmltypes	F	name: "iconPath"	title app icon (theme lookup)
+quickshell	$QS/Hyprland/_Ipc/quickshell-hyprland-ipc.qmltypes	E	name: "focusedWorkspace"	pinned media closes on a workspace switch
+
+# --- Control Center (slice 1): panel, services and links
+cc	$OMARCHY/shell/services/PluginShellApi.qml	F?	function firstPartyServiceFor(id) {	the bar's scoped shell offers first-party proxies
+cc	$OMARCHY/shell/shell.qml	F?	var allowed = ["omarchy.idle", "omarchy.media", "omarchy.nightlight", "omarchy.notifications", "omarchy.remote-session"]	Night Light, idle and notifications are offered to bar plugins
+cc	$OMARCHY/shell/shell.qml	F?	firstPartyServices[serviceId] = shell.pluginFirstPartyServiceFor(cacheKey, key, serviceId)	proxies exist before any binding reads them (no binding loop)
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	property bool enabled: false	Night Light state (proxy)
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	property bool stayAwake: false	Stay awake state (proxy)
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	property bool doNotDisturb: false	Do Not Disturb state (proxy)
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	if (serviceId === "omarchy.nightlight" && _setNightlight) _setNightlight(!!value)	setNightlight
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	if (serviceId === "omarchy.idle" && _setIdleEnabled) _setIdleEnabled(!!value)	setIdleEnabled
+cc	$OMARCHY/shell/services/PluginFirstPartyServiceApi.qml	F?	if (serviceId === "omarchy.notifications" && _setDoNotDisturb) _setDoNotDisturb(!!value)	setDoNotDisturb
+cc	$OMARCHY/shell/shell.qml	F?	return target ? target.stayAwake === true : false	proxy state follows the service (external changes reach the tiles)
+cc	$OMARCHY/shell/plugins/services/idle/Service.qml	F?	return applyStayAwake(!value, true, "ipc")	setIdleEnabled is the inverse of stay awake (logic/ControlCenter.js request)
+cc	$OMARCHY/shell/plugins/services/nightlight/Service.qml	F?	readonly property bool enabled: stateLoaded && NightlightModel.isNightlight(temperature)	Night Light reports its state after applying it (the tile waits)
+cc	$OMARCHY/shell/plugins/notifications/Service.qml	F?	property bool doNotDisturb: false	Do Not Disturb state on the service
+cc	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	required property Item anchorItem	the panel anchors to the entry button
+cc	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	if (owner && "close" in owner) owner.close()	Escape and an outside click close through the owner
+cc	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	bar.requestPopout(coordinatorKey)	one panel at a time through the bar facade
+cc	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	? (focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)	keyboard focus only while open
+cc	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	: WlrKeyboardFocus.None	no keyboard focus while closed
+cc	$OMARCHY/shell/shell.qml	F?	displayName: meta.displayName || manifest.name	panel links use the registry's display name
+
+# --- Control Center audio: the default output on Pipewire
+ccaudio	$QS/Services/Pipewire/quickshell-service-pipewire.qmltypes	F?	exports: ["Quickshell.Services.Pipewire/Pipewire 0.0"]	the Pipewire singleton
+ccaudio	$QS/Services/Pipewire/quickshell-service-pipewire.qmltypes	F?	name: "defaultAudioSink"	the default output, with a change signal (adapters/AudioOutput.qml follows it)
+ccaudio	$QS/Services/Pipewire/quickshell-service-pipewire.qmltypes	F?	exports: ["Quickshell.Services.Pipewire/PwObjectTracker 0.0"]	binds the node so its audio stays live
+ccaudio	$QS/Services/Pipewire/quickshell-service-pipewire.qmltypes	F?	exports: ["Quickshell.Services.Pipewire/PwNodeAudio 0.0"]	audio.volume and audio.muted
+ccaudio	$QS/Services/Pipewire/quickshell-service-pipewire.qmltypes	F?	name: "ready"	a node not yet bound reads as unavailable
+ccaudio	$OMARCHY/shell/plugins/panels/audio/Panel.qml	F?	readonly property var sink: Pipewire.defaultAudioSink	Omarchy's audio panel reads the same default sink
+ccaudio	$OMARCHY/shell/plugins/panels/audio/Panel.qml	F?	var volume = Math.max(0, Math.min(1, v))	its slider also stops at 100 %
+ccaudio	$OMARCHY/shell/shell.qml	F?	category: meta.category || "Plugin",	registry metadata carries the category (the full audio panel link)
+ccaudio	$OMARCHY/shell/plugins/panels/audio/manifest.json	F?	"category": "Audio"	Omarchy's audio widget is in the Audio category
+
+# --- Control Center connectivity: Wi-Fi on NetworkManager, Bluetooth on BlueZ
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	exports: ["Quickshell.Networking/Networking 0.0"]	the Networking singleton
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	name: "backend"	NetworkManager present (else the Wi-Fi tile is unavailable)
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	values: ["None", "NetworkManager"]	NetworkBackendType.NetworkManager
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	name: "devices"	the network devices
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	values: ["None", "Wifi", "Wired"]	DeviceType.Wifi: only Wi-Fi devices decide the Wi-Fi tile
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	name: "wifiEnabled"	the Wi-Fi radio state (WirelessEnabled), with a change signal
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	name: "wifiHardwareEnabled"	a hardware switch holding Wi-Fi off
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	exports: ["Quickshell.Networking/NetworkDevice 0.0"]	device type, connected and networks
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	name: "networks"	a Wi-Fi device's networks (the connected one's name)
+ccnet	$QS/Networking/quickshell-network.qmltypes	F?	exports: ["Quickshell.Networking/Network 0.0"]	a network's name and connected
+ccnet	$OMARCHY/shell/plugins/panels/network/Panel.qml	F?	Networking.wifiEnabled = !Networking.wifiEnabled	Omarchy's network panel switches the same WirelessEnabled
+ccnet	$OMARCHY/shell/plugins/panels/network/Panel.qml	F?	command: ["nmcli", "-t"	Omarchy's network panel also runs nmcli (the Wi-Fi tile's command)
+ccnet	$OMARCHY/shell/plugins/panels/network/manifest.json	F?	"id": "omarchy.network"	the full Network panel the Wi-Fi tile links to
+ccbt	$QS/Bluetooth/quickshell-bluetooth.qmltypes	F?	exports: ["Quickshell.Bluetooth/Bluetooth 0.0"]	the Bluetooth singleton
+ccbt	$QS/Bluetooth/quickshell-bluetooth.qmltypes	F?	name: "adapters"	every adapter, not only the default one
+ccbt	$QS/Bluetooth/quickshell-bluetooth.qmltypes	F?	exports: ["Quickshell.Bluetooth/BluetoothAdapter 0.0"]	an adapter's enabled (Powered), with a change signal
+ccbt	$OMARCHY/bin/omarchy-bluetooth-power	F?	# omarchy:args=<on|off|toggle|is-on>	the power helper takes on and off
+ccbt	$OMARCHY/bin/omarchy-bluetooth-power	F?	rfkill block bluetooth	off is the persistent rfkill block, for every adapter
+ccbt	$OMARCHY/shell/plugins/panels/bluetooth/Panel.qml	F?	Quickshell.execDetached(["omarchy-bluetooth-power", adapter.enabled ? "off" : "on"])	Omarchy's Bluetooth panel switches power the same way
+ccbt	$OMARCHY/shell/plugins/panels/bluetooth/manifest.json	F?	"id": "omarchy.bluetooth"	the full Bluetooth panel the Bluetooth tile links to
+ccnet	$QS/Io/quickshell-io.qmltypes	F?	name: "exited"	a radio command's exit status (its failure feedback)
+ccrf	$QS/Io/quickshell-io.qmltypes	F?	exports: ["Quickshell.Io/StdioCollector 0.0"]	the rfkill read's output
+ccrf	/usr/bin/rfkill	F?	rfkilldevices	rfkill --json prints rfkilldevices (util-linux)
+ccrf	$OMARCHY/bin/omarchy-bluetooth-power	F?	rfkill unblock bluetooth	on lifts the soft block for every switch, so a removed adapter can return
+ccrf	$OMARCHY/bin/omarchy-restart-bluetooth	F?	rfkill unblock bluetooth	Omarchy's own recovery is also the unblock
+
+# --- Control Center dashboard: responsive card, kept content, group Tab
+ccdash	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	readonly property real screenW: screen ? screen.width : 0	the card width follows the output (ControlCenter.js cardWidth)
+ccdash	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	if (cap !== undefined && Number(cap) > 0) maxWidth = Math.min(maxWidth, Number(cap))	fittedContentWidth caps the card at the output
+ccdash	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	var maxHeight = root.availableCardHeight > 0 ? root.availableCardHeight : desired	fittedContentHeight caps the card below the bar; the view scrolls inside
+ccdash	$OMARCHY/shell/Ui/KeyboardPanel.qml	F?	active: !!root.content && (root.open || root.contentRequested)	the content is kept between opens, so the view resets its page on open
+ccdash	/usr/lib/qt6/qml/QtQuick/plugins.qmltypes	F?	"QtQuick/Shortcut 2.5",	Tab between groups (a focused control takes Tab before key handlers)
+
+# --- Control Center power profile: power-profiles-daemon, Omarchy's helper
+ccpower	$QS/Services/UPower/quickshell-service-upower.qmltypes	F?	exports: ["Quickshell.Services.UPower/UPower 0.0"]	the UPower singleton (onBattery: which source a request is for)
+ccpower	$QS/Services/UPower/quickshell-service-upower.qmltypes	F?	name: "onBattery"	the power source, with a change signal
+ccpower	$QS/Services/UPower/quickshell-service-upower.qmltypes	F?	exports: ["Quickshell.Services.UPower/PowerProfiles 0.0"]	the PowerProfiles singleton (changes made anywhere)
+ccpower	$QS/Services/UPower/quickshell-service-upower.qmltypes	F?	Signal { name: "profileChanged"	followed for external changes
+ccpower	$QS/Services/UPower/quickshell-service-upower.qmltypes	F?	values: ["PowerSaver", "Balanced", "Performance"]	the enum order ControlCenter.js profileName maps
+ccpower	$OMARCHY/bin/omarchy-powerprofiles-set	F?	# omarchy:args=[autodetect|ac|battery] [power-saver|balanced|performance]	the helper takes a source and a profile
+ccpower	$OMARCHY/bin/omarchy-powerprofiles-set	F?	powerprofilesctl set "$profile" || exit	a failed switch exits non-zero before remembering
+ccpower	$OMARCHY/bin/omarchy-powerprofiles-set	F?	printf '%s\n' "$requested_profile" >"$state_file"	the choice is remembered per source last, so exit 0 means it was saved
+ccpower	$OMARCHY/shell/plugins/services/battery/Service.qml	F?	target: PowerProfiles	the shell already uses the singleton, so using it adds no daemon activation
+ccpower	$OMARCHY/shell/plugins/services/battery/Service.qml	F?	root.applyPowerProfile()	Omarchy switches the profile itself on an AC/battery change
+
+# --- Control Center brightness (adapters/BrightnessAdapter.qml)
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	  --no-osd)	the helper takes --no-osd (the panel shows the level itself)
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	  --monitor)	the helper takes an explicit output
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	  [[ $monitor =~ ^(eDP|LVDS|DSI)- ]]	internal outputs go to the backlight (ControlCenter.js backlightOutput)
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	flock -n "$lock_fd" || exit 0	a write skipped for another brightness command exits 0: only the observed level confirms
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	device="$(omarchy-hw-display)" || exit 1	the helper writes the omarchy-hw-display device, the one the adapter reads
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	brightnessctl -d "$device" set "$step" >/dev/null	an N% step is written through brightnessctl
+ccbright	$OMARCHY/bin/omarchy-brightness-display	F?	(( no_osd )) || omarchy-osd	with --no-osd the exit status does not reflect brightnessctl's
+ccbright	$OMARCHY/bin/omarchy-hw-display	F?	"$backlight_path"/intel_backlight	intel_backlight is a candidate device
+ccbright	$QS/Io/quickshell-io.qmltypes	F?	name: "watchChanges"	FileView watches actual_brightness
+ccbright	$QS/Io/quickshell-io.qmltypes	F?	Signal { name: "fileChanged"	the change notification
+ccbright	$QS/Io/quickshell-io.qmltypes	F?	Method { name: "reload"	rereads on a notification, an open or a write
+ccbright	$QS/Io/quickshell-io.qmltypes	F?	name: "loadFailed"	an unreadable or vanished device reads as unavailable
+ccbright	$QS/Io/FileView.qml	F?	property bool preload: this.__preload;	a watch-only FileView (preload false) never reads

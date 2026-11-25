@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "floating-islands",
+  "name": "Floating Islands",
+  "version": "0.1.0",
+  "author": "Floating Islands contributors",
+  "license": "MIT",
+  "description": "A floating-islands bar for the Omarchy shell (MVP candidate)",
+  "kinds": [
+    "bar"
+  ],
+  "entryPoints": {
+    "bar": "Bar.qml"
+  }
+}

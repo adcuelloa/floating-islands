@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Unified Control Center RFC & Design Discussions
+    url: https://github.com/adcuelloa/floating-islands/discussions
+    about: Discuss widget placement, Control Center UX, and pre-v1.0 design questions.
+  - name: Security Vulnerability Report
+    url: https://github.com/adcuelloa/floating-islands/security/advisories/new
+    about: Report security issues privately instead of opening a public issue.

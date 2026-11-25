@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+  path_instructions:
+    - path: "plugin/**/*.qml"
+      instructions: |
+        - Enforce Omarchy plugin boundaries: never suggest modifying /usr/share/omarchy or adding a separate daemon.
+        - Flag QML binding loops, object lifetime / teardown leaks, or late callbacks after component destruction.
+        - Flag any focus grab or keyboard focus on the bar PanelWindow; interactive popouts must use KeyboardPanel.
+        - Verify pointer/hover hit areas stay aligned with Layout.js and never block clicks in transparent gaps.
+        - Verify colors come from Theme.qml tokens (no hard-coded colors) and animations respect Style.duration (reduced motion).
+        - Check keyboard navigation (Tab/arrows/Escape), focus-ring visibility on lit/unlit states, and Accessible roles/names/descriptions.
+    - path: "plugin/adapters/**"
+      instructions: |
+        - Verify event-driven state updates; flag unnecessary polling timers where signals or FileView watchers exist.
+        - Verify Quickshell.Io.Process uses fixed argument arrays with no shell interpolation and bounded timeouts.
+        - Verify hardware/service state is observed rather than assumed from command exit status alone.
+    - path: "plugin/**/*.js"
+      instructions: |
+        - Keep pure JS modules (.pragma library) free of QML/compositor dependencies so Node unit tests can load them directly.
+        - Flag edge cases in geometry, responsive tier hysteresis, widget hosting reconciliation, and shortcut routing.
+    - path: "plugin/i18n/*.json"
+      instructions: |
+        - Verify translation key parity across all catalogs (en.json, es.json, ja.json) and valid placeholder syntax (%1, etc.).
+    - path: "scripts/**"
+      instructions: |
+        - Check bash safety (quoting, set -euo pipefail, safe mktemp/atomic mv, symlink/permission checks).
+        - Verify scripts/rollback.sh stays self-contained (bash, jq, coreutils) and works from a TTY without a graphical session.
+        - Flag any mutation of ~/.config/omarchy/shell.json or installed plugins outside explicit opt-in flags.
+    - path: "tests/**"
+      instructions: |
+        - Verify tests stay completely isolated from the live desktop, ~/.config/omarchy, and real hardware state.
+        - Check that new features or bug fixes include targeted regression tests (Node unit or offscreen QML) and contract entries when upstream symbols are added.
+    - path: ".github/**"
+      instructions: |
+        - Verify all GitHub Actions are pinned to full commit SHAs with version comments.
+        - Verify least-privilege permissions (contents: read), persist-credentials: false on checkout, and no pull_request_target or unverified artifact execution.
+        - Flag any privileged step running untrusted PR-controlled inputs or adding secrets/caches accessible to fork PRs.
+chat:
+  auto_reply: true

@@ -1,0 +1,6 @@
+module Quickshell.Io
+Process 1.0 Process.qml
+StdioCollector 1.0 StdioCollector.qml
+singleton ProcessTrap 1.0 ProcessTrap.qml
+FileView 1.0 FileView.qml
+singleton FileTrap 1.0 FileTrap.qml

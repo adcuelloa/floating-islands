@@ -1,0 +1,4 @@
+# Default maintainer review routing.
+# Keep require_code_owner_review disabled in the main ruleset while operating
+# as a single maintainer so owner-authored PRs remain mergeable via admin bypass.
+* @adcuelloa

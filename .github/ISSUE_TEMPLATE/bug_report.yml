@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a bug or compatibility issue in Floating Islands.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Describe what you observed and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Activate Floating Islands with `scripts/activate.sh --confirm`
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Output of `omarchy version`, `quickshell --version`, `pacman -Q qt6-base hyprland`, and your monitor resolution/scale (e.g., 1920x1080 @ 1.25, single or multi-monitor).
+      placeholder: |
+        - Omarchy: 4.5.0-3
+        - Quickshell: 0.3.2
+        - Qt: 6.12.0
+        - Hyprland: 0.56.2
+        - Monitors: 1920x1080 @ 1.25 (single)
+        - Floating Islands commit:
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Contract check & diagnostics (optional)
+      description: |
+        If relevant, paste the output of `tests/contract/check-contract.sh` or `omarchy-shell floating-islands geometry` / `slots`, plus any plugin warnings from `journalctl --user`.
+
+        **Review and redact sensitive information before posting:** usernames, home paths, Wi-Fi SSIDs, hostnames, or personal window titles.
+  - type: checkboxes
+    id: privacy-check
+    attributes:
+      label: Sensitive information
+      options:
+        - label: I have checked all logs, paths, and screenshots for personal or sensitive information before posting
+          required: true

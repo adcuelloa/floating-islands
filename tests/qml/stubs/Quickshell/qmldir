@@ -1,0 +1,3 @@
+module Quickshell
+SystemClock 1.0 SystemClock.qml
+Scope 1.0 Scope.qml
