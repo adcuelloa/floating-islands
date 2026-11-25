@@ -99,7 +99,15 @@ scripts/rollback.sh
 
 ### Updating an already active installation
 
-To update an existing `floating-islands` installation, pull the new revision and re-run `scripts/install.sh` (it swaps the plugin directory atomically without modifying `shell.json`). For testing development builds over a daily bar with automatic snapshot restore (`scripts/branch-test.sh`), see [docs/RECOVERY.md](docs/RECOVERY.md).
+To update an existing `floating-islands` installation, pull the new revision and re-run `scripts/install.sh` (it stages a validated copy and replaces `~/.config/omarchy/plugins/floating-islands` without modifying `shell.json`), then run `omarchy restart shell` so updated bar QML takes effect (Omarchy's plugin reload does not rebuild an active bar's QML):
+
+```bash
+git pull
+scripts/install.sh
+omarchy restart shell
+```
+
+For testing development builds over a daily bar with automatic snapshot restore (`scripts/branch-test.sh`), see [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Supported Compatibility Baseline & Alpha Limitations
 
