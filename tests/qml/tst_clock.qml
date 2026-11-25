@@ -63,7 +63,7 @@ Item {
     when: windowShown
 
     function init() {
-      Commons.Style.reduceMotion = false
+      Commons.Style.reduceMotion = true
       Commons.Style.fontScale = 1
       Commons.Style.spacing.scale = 1
       clock.tier = "full"
@@ -74,7 +74,8 @@ Item {
       var sysClock = findChild(clock, "systemClock")
       if (sysClock) sysClock.date = new Date(2026, 9, 28, 9, 5, 0)
       mouseMove(harness, 10, 10)
-      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+      tryVerify(function() { return clock.timeSlot === clock.compactTimeSlot }, 1000)
+      Commons.Style.reduceMotion = false
     }
 
     function cleanup() {
@@ -368,6 +369,150 @@ Item {
       tryVerify(function() { return clock.implicitWidth > scaledIdle }, 100, "scaled clock still expands for seconds")
       var timeLabel = findChild(clock, "clockTime")
       verify(timeLabel.implicitWidth <= timeLabel.width + 0.5, "scaled time text not clipped")
+    }
+
+    function test_animatedExpansionKeepsPrefixReadableAndShiftsLeft() {
+      verify(theme.widget > 0, "animations enabled for intermediate-frame verification")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      var secondsLabel = findChild(clock, "clockTimeSeconds")
+      verify(prefix !== null && secondsClip !== null && secondsLabel !== null)
+
+      compare(prefix.text, "09:05")
+      verify(!prefix.clip, "prefix text is never clipped")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "idle prefix fits without clipping")
+      compare(secondsClip.width, 0)
+      verify(!secondsClip.visible, "seconds clip hidden at idle")
+
+      var idlePrefixX = prefix.mapToItem(harness, 0, 0).x
+      var idleCenter = clock.x + clock.width / 2
+      var expandIntermediates = 0
+      var prevSlot = clock.timeSlot
+      var prevPrefixX = idlePrefixX
+
+      clock.opened = true
+      for (var step = 0; step < 60 && clock.timeSlot < clock.detailTimeSlot; step++) {
+        wait(12)
+        if (clock.timeSlot > clock.compactTimeSlot + 0.5 && clock.timeSlot < clock.detailTimeSlot - 0.5) {
+          expandIntermediates++
+          verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on expand frame " + step)
+          verify(secondsClip.visible, "seconds clip visible on expand frame " + step)
+          verify(secondsClip.width > 0 && secondsClip.width < clock.secondsSlot, "seconds width progressive on expand frame " + step)
+          compare(secondsLabel.x, 0, "seconds reveal from left edge")
+          verify(clock.timeSlot >= prevSlot - 0.01, "timeSlot grows monotonically")
+          var curPrefixX = prefix.mapToItem(harness, 0, 0).x
+          verify(curPrefixX <= prevPrefixX + 1.0, "prefix shifts smoothly left on expand frame " + step)
+          verify(Math.abs((clock.x + clock.width / 2) - idleCenter) <= 1.0, "island stays centered on expand frame " + step)
+          prevSlot = clock.timeSlot
+          prevPrefixX = curPrefixX
+        }
+      }
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      verify(expandIntermediates > 0, "observed intermediate expansion frames")
+      var expandedPrefixX = prefix.mapToItem(harness, 0, 0).x
+      verify(expandedPrefixX < idlePrefixX, "prefix moved left when expanded: " + expandedPrefixX + " < " + idlePrefixX)
+      compare(secondsClip.width, clock.secondsSlot)
+      compare(secondsLabel.opacity, 1)
+      verify(secondsLabel.implicitWidth <= secondsClip.width + 0.5, "settled seconds fit without clipping")
+
+      var collapseIntermediates = 0
+      prevSlot = clock.timeSlot
+      prevPrefixX = expandedPrefixX
+      clock.opened = false
+      for (var cStep = 0; cStep < 60 && clock.timeSlot > clock.compactTimeSlot; cStep++) {
+        wait(12)
+        if (clock.timeSlot > clock.compactTimeSlot + 0.5 && clock.timeSlot < clock.detailTimeSlot - 0.5) {
+          collapseIntermediates++
+          verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on collapse frame " + cStep)
+          verify(secondsClip.width > 0 && secondsClip.width < clock.secondsSlot, "seconds retract progressively on collapse frame " + cStep)
+          verify(clock.timeSlot <= prevSlot + 0.01, "timeSlot shrinks monotonically")
+          var colPrefixX = prefix.mapToItem(harness, 0, 0).x
+          verify(colPrefixX >= prevPrefixX - 1.0, "prefix shifts smoothly right on collapse frame " + cStep)
+          verify(Math.abs((clock.x + clock.width / 2) - idleCenter) <= 1.0, "island stays centered on collapse frame " + cStep)
+          prevSlot = clock.timeSlot
+          prevPrefixX = colPrefixX
+        }
+      }
+      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+      verify(collapseIntermediates > 0, "observed intermediate collapse frames")
+      compare(secondsClip.width, 0)
+      verify(!secondsClip.visible, "seconds clip hidden after collapse")
+      verify(Math.abs(prefix.mapToItem(harness, 0, 0).x - idlePrefixX) <= 1.0, "prefix returns to idle x")
+    }
+
+    function test_animatedAmPmFormatShiftsSuffixRightWithoutClipping() {
+      verify(theme.widget > 0, "animations enabled")
+      clock.timeFormat = "h:mm AP"
+      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      var secondsLabel = findChild(clock, "clockTimeSeconds")
+      var suffix = findChild(clock, "clockTimeSuffix")
+      verify(prefix !== null && secondsClip !== null && secondsLabel !== null && suffix !== null)
+
+      compare(prefix.text, "9:05")
+      compare(suffix.text, " AM")
+      verify(suffix.visible)
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "12h prefix unclipped at idle")
+      verify(suffix.implicitWidth <= suffix.width + 0.5, "AM/PM suffix unclipped at idle")
+
+      var idlePrefixX = prefix.mapToItem(harness, 0, 0).x
+      var idleSuffixX = suffix.mapToItem(harness, 0, 0).x
+      var intermediates = 0
+
+      clock.opened = true
+      for (var step = 0; step < 60 && clock.timeSlot < clock.detailTimeSlot; step++) {
+        wait(12)
+        if (clock.timeSlot > clock.compactTimeSlot + 0.5 && clock.timeSlot < clock.detailTimeSlot - 0.5) {
+          intermediates++
+          verify(prefix.implicitWidth <= prefix.width + 0.5, "12h prefix unclipped mid-transition")
+          verify(suffix.implicitWidth <= suffix.width + 0.5, "AM/PM suffix unclipped mid-transition")
+          verify(prefix.mapToItem(harness, 0, 0).x <= idlePrefixX + 1.0, "12h prefix moves left")
+          verify(suffix.mapToItem(harness, 0, 0).x >= idleSuffixX - 1.0, "AM/PM suffix moves right")
+        }
+      }
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      verify(intermediates > 0, "observed intermediate 12h expansion frames")
+      verify(prefix.mapToItem(harness, 0, 0).x < idlePrefixX, "12h prefix shifted left")
+      verify(suffix.mapToItem(harness, 0, 0).x > idleSuffixX, "AM/PM suffix shifted right")
+      compare(secondsLabel.text, ":00")
+      compare(secondsClip.width, clock.secondsSlot)
+    }
+
+    function test_interruptedAndReversedHoverTransitionRecoversCleanly() {
+      verify(theme.widget > 0, "animations enabled")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      var secondsLabel = findChild(clock, "clockTimeSeconds")
+      verify(prefix !== null && secondsClip !== null && secondsLabel !== null)
+
+      // Expand halfway, then immediately reverse to collapse.
+      clock.detailed = true
+      tryVerify(function() {
+        return clock.timeSlot > clock.compactTimeSlot + 1 && clock.timeSlot < clock.detailTimeSlot - 1
+      }, 500, "reached mid-expansion before interruption")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped at expansion interruption")
+
+      clock.detailed = false
+      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+      compare(secondsClip.width, 0)
+      verify(!secondsClip.visible, "reversed expansion settles cleanly to idle")
+
+      // Expand to full, start collapsing, then re-expand mid-collapse.
+      clock.detailed = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      clock.detailed = false
+      tryVerify(function() {
+        return clock.timeSlot > clock.compactTimeSlot + 1 && clock.timeSlot < clock.detailTimeSlot - 1
+      }, 500, "reached mid-collapse before re-expansion")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped at collapse interruption")
+
+      clock.detailed = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      compare(secondsClip.width, clock.secondsSlot)
+      compare(secondsLabel.opacity, 1)
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped after re-expansion")
     }
 
     function test_islandHeight() {

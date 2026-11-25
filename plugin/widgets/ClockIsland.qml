@@ -91,10 +91,14 @@ Island {
   // only then does the clock tick every second.
   readonly property int detailDelay: 400
   property bool detailed: false
+  readonly property var timeFormatParts: ClockFormat.splitSeconds(timeFormat)
   readonly property bool secondsShown: detailed || opened || timeFormat.indexOf("s") !== -1
   readonly property string detailFormat: ClockFormat.withSeconds(timeFormat)
   readonly property string detailTimeText: now.toLocaleString(locale, detailFormat)
   readonly property string compactTimeText: now.toLocaleString(locale, timeFormat)
+  readonly property string prefixTimeText: now.toLocaleString(locale, timeFormatParts.prefix)
+  readonly property string secondsTimeText: timeFormatParts.expandable ? now.toLocaleString(locale, timeFormatParts.seconds) : ""
+  readonly property string suffixTimeText: timeFormatParts.suffix !== "" ? now.toLocaleString(locale, timeFormatParts.suffix) : ""
   readonly property string timeText: detailed || opened ? detailTimeText : compactTimeText
   readonly property string weekdayText: now.toLocaleString(locale, ClockFormat.WEEKDAY_FORMAT)
   // The day and month in the language's own order ("29 Oct", "10月29日").
@@ -103,10 +107,17 @@ Island {
   // The time's slot: fits the idle time format by default, and expands to fit
   // seconds while hovered (after detailDelay), while the calendar is open, or
   // when timeFormat explicitly includes seconds.
-  readonly property real compactTimeSlot: Math.ceil(timeMetrics.advanceWidth)
-  readonly property real detailTimeSlot: Math.ceil(Math.max(timeMetrics.advanceWidth, detailMetrics.advanceWidth))
+  readonly property real prefixSlot: Math.ceil(prefixMetrics.advanceWidth)
+  readonly property real secondsSlot: timeFormatParts.expandable ? Math.ceil(secondsMetrics.advanceWidth) : 0
+  readonly property real suffixSlot: timeFormatParts.suffix !== "" ? Math.ceil(suffixMetrics.advanceWidth) : 0
+  readonly property real compactTimeSlot: prefixSlot + suffixSlot
+  readonly property real detailTimeSlot: compactTimeSlot + secondsSlot
   readonly property real targetTimeSlot: secondsShown ? detailTimeSlot : compactTimeSlot
   property real timeSlot: targetTimeSlot
+  readonly property real secondsRevealWidth: timeFormatParts.expandable
+    ? Math.max(0, Math.min(secondsSlot, timeSlot - compactTimeSlot))
+    : 0
+  readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
 
   Behavior on timeSlot {
     enabled: root.theme.widget > 0
@@ -168,8 +179,9 @@ Island {
     onTriggered: root.detailed = hover.hovered
   }
 
-  TextMetrics { id: timeMetrics; font: timeLabel.font; text: ClockFormat.stableDigits(root.compactTimeText) }
-  TextMetrics { id: detailMetrics; font: timeLabel.font; text: ClockFormat.stableDigits(root.detailTimeText) }
+  TextMetrics { id: prefixMetrics; font: prefixLabel.font; text: ClockFormat.stableDigits(root.prefixTimeText) }
+  TextMetrics { id: secondsMetrics; font: prefixLabel.font; text: ClockFormat.stableDigits(root.secondsTimeText) }
+  TextMetrics { id: suffixMetrics; font: prefixLabel.font; text: ClockFormat.stableDigits(root.suffixTimeText) }
   TextMetrics { id: weekdayMetrics; font: weekdayLabel.font; text: root.weekdayText }
   TextMetrics { id: dateMetrics; font: dateLabel.font; text: root.dateText }
 
@@ -191,21 +203,71 @@ Island {
 
     // Flat on purpose: each part shows or hides on its own, so the row
     // re-measures as the tier changes (a hidden nested Row did not).
-    Text {
-      id: timeLabel
+    // Within the time slot, prefix (HH:mm) stays unclipped and slides left as
+    // the island expands symmetrically, while :ss reveals progressively in the
+    // space opening on its right (and any trailing AM/PM shifts right).
+    Row {
+      id: timeContainer
 
       objectName: "clockTime"
       anchors.verticalCenter: parent.verticalCenter
       width: root.timeSlot
-      clip: true
-      horizontalAlignment: Text.AlignHCenter
-      textFormat: Text.PlainText
-      text: root.timeText
-      color: root.theme.foreground
-      font.family: root.theme.monoFamily
-      font.pixelSize: root.theme.timeSize
-      font.weight: Font.DemiBold
-      font.letterSpacing: root.theme.timeSize * 0.02
+      height: prefixLabel.implicitHeight
+      spacing: 0
+
+      Text {
+        id: prefixLabel
+
+        objectName: "clockTimePrefix"
+        anchors.verticalCenter: parent.verticalCenter
+        width: root.prefixSlot
+        horizontalAlignment: Text.AlignLeft
+        textFormat: Text.PlainText
+        text: root.prefixTimeText
+        color: root.theme.foreground
+        font.family: root.theme.monoFamily
+        font.pixelSize: root.theme.timeSize
+        font.weight: Font.DemiBold
+        font.letterSpacing: root.theme.timeSize * 0.02
+      }
+
+      Item {
+        id: secondsClip
+
+        objectName: "clockTimeSecondsClip"
+        anchors.verticalCenter: parent.verticalCenter
+        width: root.secondsRevealWidth
+        height: prefixLabel.implicitHeight
+        visible: root.timeFormatParts.expandable && width > 0
+        clip: true
+
+        Text {
+          id: secondsLabel
+
+          objectName: "clockTimeSeconds"
+          x: 0
+          anchors.verticalCenter: parent.verticalCenter
+          opacity: Math.min(1, root.secondsRevealProgress * 1.4)
+          textFormat: Text.PlainText
+          text: root.secondsTimeText
+          color: root.theme.foreground
+          font: prefixLabel.font
+        }
+      }
+
+      Text {
+        id: suffixLabel
+
+        objectName: "clockTimeSuffix"
+        anchors.verticalCenter: parent.verticalCenter
+        width: root.suffixSlot
+        visible: root.suffixTimeText !== ""
+        horizontalAlignment: Text.AlignLeft
+        textFormat: Text.PlainText
+        text: root.suffixTimeText
+        color: root.theme.foreground
+        font: prefixLabel.font
+      }
     }
 
     Text {
