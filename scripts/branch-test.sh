@@ -7,6 +7,7 @@
 #   branch-test.sh --arm 45     snapshot, restore by itself in 45 min (1-240)
 #   (then scripts/install.sh and `omarchy restart shell` to load the build)
 #   branch-test.sh --restore    put the snapshot back now and restart the shell
+#   branch-test.sh --accept     keep the current build, stop rollback, preserve snapshot backup
 #   branch-test.sh --status     the snapshot and the deadline, if armed
 #
 # This restores the previous Floating Islands installation. It is not the
@@ -34,6 +35,7 @@ config="$HOME/.config/omarchy/shell.json"
 plugins_dir="$HOME/.config/omarchy/plugins"
 state_root=${XDG_STATE_HOME:-$HOME/.local/state}
 state=${ISLANDS_BRANCH_TEST_DIR:-$state_root/islands-branch-test}
+backup_root=${ISLANDS_BRANCH_TEST_BACKUP_DIR:-${state}-backups}
 unit=islands-branch-restore
 boot_unit=islands-branch-restore-boot.service
 boot_unit_file="$HOME/.config/systemd/user/$boot_unit"
@@ -45,13 +47,107 @@ die() { printf 'branch-test.sh: %s\n' "$*" >&2; exit 1; }
 
 deadline_in() { date -d "+$1 min" '+%Y-%m-%d %H:%M:%S'; }
 
-# The state directory is trusted only if it is ours, private and real.
+# A private directory is trusted only if it is ours, private (700) and real.
+dir_safe() {
+  [[ -d $1 && ! -L $1 && -O $1 && $(stat -c %a "$1") == 700 ]]
+}
+
 state_safe() {
-  [[ -d $state && ! -L $state && -O $state && $(stat -c %a "$state") == 700 ]]
+  dir_safe "$state"
+}
+
+# Acquire an exclusive non-blocking lock on $state/lock and verify the directory
+# and lock inode did not change while opening or locking.
+acquire_lock() {
+  [[ ! -L $state/lock ]] || die "unsafe lock file in $state"
+  exec 8>"$state/lock" || die "could not open lock in $state"
+  flock -n 8 || die "another restore or accept is running"
+  state_safe && [[ -f $state/lock && ! -L $state/lock && $state/lock -ef /dev/fd/8 ]] \
+    || die "$state changed while acquiring lock; refusing to proceed"
 }
 
 # Every regular file in a plugin tree with its checksum, in a stable order.
 tree_sums() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum); }
+
+# Verify an armed snapshot directory's required files, safety and checksums.
+verify_snapshot_dir() {
+  local dir=$1
+  local id
+  [[ -f $dir/complete && ! -L $dir/complete ]] || return 1
+  [[ -f $dir/id && ! -L $dir/id && -s $dir/id ]] || return 1
+  [[ -d $dir/plugin && ! -L $dir/plugin ]] || return 1
+  [[ -f $dir/plugin.sha256 && ! -L $dir/plugin.sha256 && -s $dir/plugin.sha256 ]] || return 1
+  [[ -f $dir/shell.json && ! -L $dir/shell.json && -s $dir/shell.json ]] || return 1
+  [[ -f $dir/shell.json.sha256 && ! -L $dir/shell.json.sha256 && -s $dir/shell.json.sha256 ]] || return 1
+  id=$(<"$dir/id")
+  [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $id != *..* ]] || return 1
+  [[ -z $(find "$dir/plugin" -type l -print -quit) ]] || return 1
+  jq -e 'type == "object" and .version == 1' "$dir/shell.json" >/dev/null 2>&1 || return 1
+  [[ $(tree_sums "$dir/plugin") == $(<"$dir/plugin.sha256") ]] || return 1
+  [[ $(sha256sum "$dir/shell.json" | cut -d' ' -f1) == $(<"$dir/shell.json.sha256") ]] || return 1
+}
+
+# Verify that the currently installed plugin and shell.json are valid and select
+# the expected plugin id. Never mutates the live installation or configuration.
+verify_current_install() {
+  local id=$1
+  local current_id entry
+  [[ -f $config && ! -L $config && -s $config ]] || die "current shell.json is missing or unreadable"
+  jq -e 'type == "object" and .version == 1' "$config" >/dev/null 2>&1 \
+    || die "current shell.json is not a valid Omarchy shell.json (version 1)"
+  current_id=$(jq -r '.bar.id // empty' "$config")
+  [[ $current_id == "$id" ]] \
+    || die "selected bar is '${current_id:-stock}', expected '$id'; refusing to accept"
+
+  local target="$plugins_dir/$id"
+  [[ -d $target && ! -L $target ]] || die "current plugin $id is not installed at $target"
+  [[ -z $(find "$target" -type l -print -quit) ]] || die "current plugin $id contains symlinks; refusing to accept"
+  [[ -f $target/manifest.json && ! -L $target/manifest.json ]] || die "current plugin $id is missing manifest.json"
+  jq -e --arg id "$id" '
+      type == "object"
+      and .schemaVersion == 1
+      and .id == $id
+      and (.kinds | type == "array")
+      and ((.kinds | index("bar")) != null)
+      and (.entryPoints.bar | type == "string")
+      and (.entryPoints.bar | length > 0)
+    ' "$target/manifest.json" >/dev/null 2>&1 \
+    || die "current plugin $id has an invalid manifest.json; refusing to accept"
+  entry=$(jq -r '.entryPoints.bar' "$target/manifest.json")
+  [[ $entry != /* && $entry != *..* && -f "$target/$entry" && ! -L "$target/$entry" ]] \
+    || die "current plugin $id is missing bar entry point '$entry'; refusing to accept"
+  if [[ -x $OMARCHY_PATH/bin/omarchy-plugin-validate ]]; then
+    "$OMARCHY_PATH/bin/omarchy-plugin-validate" "$target" >/dev/null 2>&1 \
+      || die "omarchy-plugin-validate rejected current plugin $id; refusing to accept"
+  fi
+}
+
+stop_restore_timer_strict() {
+  local err rc=0
+  err=$(systemctl --user stop "$unit.timer" 2>&1) || rc=$?
+  if (( rc != 0 )); then
+    # Exit 5 ("Unit ... not loaded") means the transient timer is already gone.
+    if (( rc == 5 )) || [[ $err == *"not loaded"* ]]; then
+      return 0
+    fi
+    return "$rc"
+  fi
+  systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+  return 0
+}
+
+remove_boot_unit_strict() {
+  local wants_link="$HOME/.config/systemd/user/default.target.wants/$boot_unit"
+  if [[ -e $boot_unit_file || -L $boot_unit_file || -L $wants_link ]]; then
+    systemctl --user disable --quiet "$boot_unit" >/dev/null 2>&1 || return 1
+    if [[ -e $boot_unit_file || -L $boot_unit_file ]]; then
+      rm -f -- "$boot_unit_file" || return 1
+    fi
+    [[ ! -e $boot_unit_file && ! -L $boot_unit_file && ! -L $wants_link ]] || return 1
+    systemctl --user daemon-reload >/dev/null 2>&1 || return 1
+  fi
+  return 0
+}
 
 arm_timer() { # <minutes> <args for the snapshot's copy...>
   local minutes=$1
@@ -110,7 +206,9 @@ cmd_arm() {
   [[ -z $(find "$plugins_dir/$id" -type l -print -quit) ]] || die "the installed $id contains symlinks; not snapshotting it"
 
   if [[ -e $state || -L $state ]]; then
-    [[ -e $state/complete ]] && die "already armed ($state); run --restore or --status"
+    [[ -e $state/accepted ]] && die "previous session in $state was accepted but cleanup is incomplete; run --accept to finish cleanup"
+    [[ -e $state/restoring ]] && die "a restore is in progress in $state; run --restore to finish"
+    [[ -e $state/complete ]] && die "already armed ($state); run --restore, --accept or --status"
     die "an incomplete snapshot is in $state (an interrupted --arm); check it, remove it, then arm again"
   fi
   mkdir -p "${state%/*}" && mkdir -m 700 -- "$state" || die "could not create $state"
@@ -146,14 +244,23 @@ cmd_arm() {
 cmd_restore() {
   [[ -e $state || -L $state ]] || die "nothing armed ($state)"
   state_safe || die "$state is not a private directory; not trusting it (scripts/rollback.sh is the fallback)"
+  acquire_lock
+  if [[ -e $state/accepted ]]; then
+    local kept
+    kept=$(cat "$state/accepted" 2>/dev/null || true)
+    die "session in $state was already accepted (backup in ${kept:-unknown}); refusing to restore"
+  fi
   [[ -e $state/complete && -s $state/shell.json && -d $state/plugin && -s $state/id ]] \
     || die "the snapshot in $state is incomplete; run scripts/rollback.sh"
-  exec 8>"$state/lock"
-  flock -n 8 || die "another restore is running"
   local id
   id=$(<"$state/id")
   [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $id != *..* ]] || die "the snapshot names no usable plugin id"
   jq -e . "$state/shell.json" >/dev/null 2>&1 || die "the snapshot's shell.json is unreadable; run scripts/rollback.sh"
+  verify_snapshot_dir "$state" || die "the snapshot in $state failed integrity verification; snapshot kept"
+
+  # Mark restoration started before modifying live files so --accept cannot race
+  # or run during a locked-screen --restart retry window.
+  : >"$state/restoring" || die "could not record restore state in $state"
 
   # A complete copy swapped in, so the shell's watcher never sees half a plugin.
   # An interrupted run leaves the snapshot intact and can simply run again.
@@ -191,11 +298,95 @@ cmd_restore() {
   rm -rf -- "$state"
 }
 
+cmd_accept() {
+  command -v jq >/dev/null && command -v flock >/dev/null && command -v sha256sum >/dev/null \
+    || die "jq, flock and sha256sum are required"
+  [[ -e $state || -L $state ]] || die "nothing armed ($state)"
+  state_safe || die "$state is not a private directory; refusing to accept"
+  acquire_lock
+
+  if [[ -e $state/restoring ]]; then
+    die "restore has already started in $state; refusing to accept (run --restore to finish)"
+  fi
+
+  local backup_dir="" id=""
+  if [[ -e $state/accepted ]]; then
+    [[ -f $state/accepted && ! -L $state/accepted ]] || die "unsafe acceptance marker in $state"
+    backup_dir=$(<"$state/accepted")
+    [[ -n $backup_dir ]] && dir_safe "$backup_dir" && verify_snapshot_dir "$backup_dir" \
+      || die "recorded backup '$backup_dir' is missing or invalid; check $state and $backup_root manually"
+    id=$(<"$backup_dir/id")
+  else
+    verify_snapshot_dir "$state" \
+      || die "the snapshot in $state is missing, incomplete or corrupted; refusing to accept"
+    id=$(<"$state/id")
+    verify_current_install "$id"
+
+    if [[ -e $backup_root || -L $backup_root ]]; then
+      dir_safe "$backup_root" || die "backup root $backup_root is not a private directory; refusing to accept"
+    else
+      mkdir -p "${backup_root%/*}" && mkdir -m 700 -- "$backup_root" \
+        || die "could not create backup root $backup_root"
+      dir_safe "$backup_root" || die "backup root $backup_root is not a private directory; refusing to accept"
+    fi
+
+    local stamp
+    stamp=$(date +%Y%m%d-%H%M%S)
+    backup_dir=$(umask 077 && mktemp -d "$backup_root/${id}-${stamp}.XXXXXX") \
+      || die "could not create backup directory under $backup_root"
+    dir_safe "$backup_dir" || { rm -rf -- "$backup_dir"; die "backup directory $backup_dir is not private"; }
+
+    if ! { cp -a "$state/plugin" "$backup_dir/plugin" &&
+           cp -p "$state/plugin.sha256" "$backup_dir/plugin.sha256" &&
+           cp -p "$state/shell.json" "$backup_dir/shell.json" &&
+           cp -p "$state/shell.json.sha256" "$backup_dir/shell.json.sha256" &&
+           cp -p "$state/id" "$backup_dir/id" &&
+           { [[ ! -f $state/branch-test.sh || -L $state/branch-test.sh ]] || cp -p "$state/branch-test.sh" "$backup_dir/branch-test.sh"; } &&
+           cmp -s "$state/shell.json" "$backup_dir/shell.json" &&
+           : >"$backup_dir/complete" &&
+           verify_snapshot_dir "$backup_dir"; }; then
+      rm -rf -- "$backup_dir"
+      die "could not preserve verified backup of original snapshot; session remains armed"
+    fi
+
+    # Commit terminal acceptance state before stopping timers or boot recovery.
+    # Any dispatched --restore seeing this marker refuses to revert the accepted bar.
+    if ! { printf '%s\n' "$backup_dir" >"$state/accepted.tmp" && mv -- "$state/accepted.tmp" "$state/accepted"; }; then
+      rm -f -- "$state/accepted.tmp"
+      die "could not commit acceptance state; backup preserved in $backup_dir and session remains armed"
+    fi
+  fi
+
+  local cleanup_failed=0
+  if ! stop_restore_timer_strict; then
+    say "could not stop restore timer ($unit.timer); acceptance is committed and backup is in $backup_dir" >&2
+    cleanup_failed=1
+  fi
+  if ! remove_boot_unit_strict; then
+    say "could not remove login restore ($boot_unit); acceptance is committed and backup is in $backup_dir" >&2
+    cleanup_failed=1
+  fi
+  if (( cleanup_failed )); then
+    die "recovery cleanup did not complete; re-run --accept to finish cleanup (accepted bar is protected from restore)"
+  fi
+
+  # Drop complete before removing $state so an interrupted deletion can never
+  # leave a restorable snapshot without its accepted marker.
+  rm -f -- "$state/complete"
+  rm -rf -- "$state" || die "cleanup completed but could not remove $state; backup is preserved in $backup_dir"
+  say "accepted current $id installation and shell.json (unchanged, no shell restart)"
+  say "previous snapshot preserved in $backup_dir"
+}
+
 # Files are back and verified; only the restart is retried, a bounded number of times.
 cmd_restart() {
   local attempt=${1:-1}
   [[ $attempt =~ ^[0-9]+$ ]] || attempt=$retry_limit
+  [[ -e $state || -L $state ]] || die "nothing armed ($state)"
   state_safe || die "$state is not a private directory; not trusting it"
+  acquire_lock
+  [[ ! -e $state/accepted ]] || die "session in $state was accepted; refusing to restart"
+  [[ -e $state/restoring ]] || die "no restore in progress in $state"
   if ! session_up || restart_shell; then
     say "shell restarted"
     rm -rf -- "$state"
@@ -207,7 +398,11 @@ cmd_restart() {
 }
 
 cmd_status() {
-  if [[ -e $state/complete ]]; then
+  if [[ -e $state/accepted ]]; then
+    say "accepted (cleanup pending): backup in $(cat "$state/accepted" 2>/dev/null); run --accept to finish cleanup"
+  elif [[ -e $state/restoring ]]; then
+    say "restoring: $(cat "$state/id" 2>/dev/null), snapshot in $state"
+  elif [[ -e $state/complete ]]; then
     say "armed: $(cat "$state/id" 2>/dev/null), snapshot in $state"
   elif [[ -e $state ]]; then
     say "incomplete snapshot in $state"
@@ -221,7 +416,8 @@ cmd_status() {
 case ${1:-} in
   --arm) cmd_arm "${2:-}" ;;
   --restore) cmd_restore ;;
+  --accept) cmd_accept ;;
   --restart) cmd_restart "${2:-}" ;;
   --status) cmd_status ;;
-  *) die "usage: branch-test.sh --arm MINUTES | --restore | --status" ;;
+  *) die "usage: branch-test.sh --arm MINUTES | --restore | --accept | --status" ;;
 esac

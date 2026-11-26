@@ -72,25 +72,83 @@ the script prints the command to run once back in the session.
 ## Testing a build over the persistent bar
 
 When this bar is already the daily bar, a development build is tested with
-`scripts/branch-test.sh`, not with a trial:
+`scripts/branch-test.sh`, not with a trial. The local-first development loop is:
 
-```
+**Implement → protected preview → owner feedback → correct → validate → explicit acceptance**
+
+```bash
 scripts/branch-test.sh --arm 45   # snapshot the installed plugin and shell.json
-scripts/install.sh                # the build under test
+scripts/install.sh                # install the build under test
 omarchy restart shell             # the bar's own QML loads only on a restart
-...                               # the supervised checks
-scripts/branch-test.sh --restore  # put the snapshot back, restart the shell
+...                               # supervised checks, feedback, corrections, validation
+scripts/branch-test.sh --restore  # revert to the previous snapshot and restart the shell
+# OR, once satisfied with the validated preview:
+scripts/branch-test.sh --accept   # retain this build in place, stop rollback, preserve backup
 ```
 
-Two different ends:
+Three different ends:
 
-- **Restore (the normal end).** `--restore`, or the timer at the deadline,
-  puts back the previous Floating Islands installation and the exact
-  `shell.json`, checked against its checksum, then restarts the shell. The
-  bar stays selected.
-- **Emergency fallback.** `scripts/rollback.sh` returns the *stock* Omarchy
+- **Restore (`--restore`, or the timer at the deadline).** Puts back the
+  previous Floating Islands installation and the exact `shell.json`, checked
+  against its checksum, then restarts the shell. The bar stays selected.
+- **Explicit acceptance (`--accept`).** Retains the currently installed plugin
+  and current `~/.config/omarchy/shell.json` byte-for-byte without reinstalling
+  or restarting `omarchy-shell`. Acceptance is always an explicit manual
+  decision — it never runs automatically on passing tests. Accepting a local
+  installation only promotes the already-installed local desktop preview; it is
+  separate from committing, pushing, merging, or publishing changes in git.
+- **Emergency fallback (`scripts/rollback.sh`).** Returns the *stock* Omarchy
   bar. Use it when the shell will not come back; it needs nothing from the
   snapshot and works from a TTY. Restore the daily bar afterwards on purpose.
+
+### What `--accept` retains and preserves
+
+Before accepting, `scripts/branch-test.sh --accept` verifies that:
+
+1. the armed snapshot directory (`~/.local/state/islands-branch-test`) is a
+   real, owner-owned, mode `700` directory with a complete, checksum-valid
+   snapshot;
+2. no restoration has started or completed (`restoring` marker or active lock);
+3. `~/.config/omarchy/shell.json` is valid version-1 JSON selecting the
+   expected plugin ID, and the installed plugin passes manifest/entry-point
+   validation (`omarchy-plugin-validate` when available).
+
+Once verified, `--accept`:
+
+- **Retains** the currently installed plugin under
+  `~/.config/omarchy/plugins/<id>` and the current `~/.config/omarchy/shell.json`
+  (including any settings adjustments made during the preview) unchanged, with
+  no reinstall and no shell restart.
+- **Preserves** the original armed snapshot (plugin tree, `shell.json`,
+  checksums, `id`, and script copy) in a private (mode `700`), uniquely named
+  directory under `~/.local/state/islands-branch-test-backups/<id>-<timestamp>.<random>`.
+  Existing recovery backups are never overwritten or automatically pruned.
+- **Commits** a terminal `accepted` marker before stopping the transient
+  deadline timer and removing `islands-branch-restore-boot.service`, so an
+  already-dispatched timer or login restore cannot revert an accepted
+  installation. If timer or login-unit cleanup fails, `--accept` exits non-zero
+  and keeps the `accepted` marker so the accepted bar remains protected until
+  you re-run `scripts/branch-test.sh --accept` to finish cleanup.
+
+### Restoring a preserved backup after acceptance
+
+To roll back to a previously accepted snapshot preserved under
+`~/.local/state/islands-branch-test-backups/`:
+
+1. Confirm no branch-test session is currently armed (`scripts/branch-test.sh --status`).
+2. Copy the chosen backup directory into `~/.local/state/islands-branch-test`
+   (copying keeps the original backup directory untouched):
+
+   ```bash
+   cp -a ~/.local/state/islands-branch-test-backups/<backup-name> ~/.local/state/islands-branch-test
+   chmod 700 ~/.local/state/islands-branch-test
+   scripts/branch-test.sh --restore
+   ```
+
+`--restore` verifies the snapshot checksums, atomically swaps the previous
+plugin and `shell.json` back into place, verifies the restored files, restarts
+the shell, and removes `~/.local/state/islands-branch-test` while leaving the
+preserved copy in `~/.local/state/islands-branch-test-backups/` intact.
 
 The restore has two temporary triggers, both removed once the restored files
 verify:
@@ -158,8 +216,9 @@ file layout are real; `omarchy-shell` and `hyprctl` are stubs. Covered:
 - an unreadable `shell.json`, which is reported and left untouched;
 - uninstall.
 
-`branch-test.sh` is covered there too (arm, restore, verification, refusals,
-the lock, the login path, the locked-screen retry). Live, on 2026-10-31, its
+`branch-test.sh` is covered there too (arm, restore, accept, backup preservation
+and recovery, verification, refusals, shared locking, cleanup-failure recovery,
+the login path, the locked-screen retry). Live, on 2026-10-31, its
 wall-clock timer fired on its own, restored the installed plugin (every file
 checksum) and `shell.json` (byte-identical), restarted the shell and removed
 the timer, the login unit and the snapshot. A real reboot has not been tested.

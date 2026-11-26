@@ -51,7 +51,18 @@ EOF
 printf '#!/usr/bin/env bash\necho "hyprctl $*" >>"$SANDBOX_CALLS"\n' >"$stubs/hyprctl"
 # Timers are recorded, never created.
 printf '#!/usr/bin/env bash\necho "systemd-run $*" >>"$SANDBOX_CALLS"\n' >"$stubs/systemd-run"
-printf '#!/usr/bin/env bash\necho "systemctl $*" >>"$SANDBOX_CALLS"\n' >"$stubs/systemctl"
+cat >"$stubs/systemctl" <<'EOF'
+#!/usr/bin/env bash
+echo "systemctl $*" >>"$SANDBOX_CALLS"
+fail_file="${SANDBOX_CALLS%/*}/systemctl-fail"
+if [[ -f $fail_file ]]; then
+  pat=$(<"$fail_file")
+  if [[ -n $pat && "$*" == *"$pat"* ]]; then
+    echo "simulated systemctl failure: $*" >&2
+    exit 1
+  fi
+fi
+EOF
 chmod +x "$stubs"/*
 
 # An Omarchy tree whose omarchy-shell is the stub, so even a script that puts
@@ -393,6 +404,209 @@ check "  a wall-clock restart retry is armed" \
 rm -f "$sandbox/restart-fails"
 check "  the retry restarts the shell and removes the snapshot" \
   bash -c "env -i HOME='$home' PATH='$stubs:$OMARCHY/bin:/usr/bin:/bin' OMARCHY_PATH='$OMARCHY' SANDBOX_CALLS='$sandbox/calls.log' ISLANDS_BRANCH_TEST_DIR='$bt' bash '$bt/branch-test.sh' --restart 1 >/dev/null && test ! -e '$bt'"
+
+# ---------------------------------------------- branch-test.sh --accept
+bt_backups="$sandbox/branch-test-backups"
+tree_digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1); }
+
+# 1. Successful acceptance retains plugin + shell.json byte-for-byte, cleans up
+#    timer + login unit without restarting the shell, and preserves a recoverable backup.
+rm -rf "$bt" "$bt_backups" "$boot_unit"
+seed_config
+in_sandbox "$repo/scripts/install.sh" >/dev/null
+jq --arg id "$plugin_id" '.bar.id = $id' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
+pre_accept_plugin=$(tree_digest "$installed")
+pre_accept_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+
+check "branch-test --accept with nothing armed fails" fails branch --accept
+check "branch-test arms for acceptance test" branch --arm 45
+# Simulate an accepted development build and updated bar settings.
+echo "// accepted build marker" >"$installed/ACCEPTED-BUILD"
+jq '.bar.islands.extraHosted = ["omarchy.weather"]' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
+accepted_plugin=$(tree_digest "$installed")
+accepted_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+cp "$bt/branch-test.sh" "$sandbox/dispatched-branch-test.sh"
+
+mark=$(ncalls)
+check "branch-test --accept succeeds" branch --accept
+check "  accepted plugin is retained byte-for-byte" \
+  test "$(tree_digest "$installed")" = "$accepted_plugin"
+check "  accepted shell.json is retained byte-for-byte" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$accepted_cfg"
+check "  no shell restart was requested on acceptance" \
+  fails bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
+check "  timer is stopped and login restore is disabled and removed" \
+  bash -c "calls=\$(tail -n +$((mark + 1)) '$sandbox/calls.log'); grep -q 'systemctl --user stop islands-branch-restore.timer' <<<\"\$calls\" && grep -q 'systemctl --user disable --quiet islands-branch-restore-boot.service' <<<\"\$calls\" && grep -q 'systemctl --user daemon-reload' <<<\"\$calls\" && test ! -e '$boot_unit'"
+check "  armed state directory is cleaned up" test ! -e "$bt"
+check "  backup root is private (700)" test "$(stat -c %a "$bt_backups")" = 700
+backup_one=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+check "  preserved backup is private (700) and complete" \
+  bash -c "test -n '$backup_one' && test \"\$(stat -c %a '$backup_one')\" = 700 && test -f '$backup_one/complete'"
+check "  preserved backup plugin matches original snapshot and checksums" \
+  bash -c "test \"\$(cd '$backup_one/plugin' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum)\" = \"\$(cat '$backup_one/plugin.sha256')\" && test \"\$(cd '$backup_one/plugin' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)\" = '$pre_accept_plugin'"
+check "  preserved backup shell.json matches original snapshot and checksum" \
+  bash -c "test \"\$(sha256sum '$backup_one/shell.json' | cut -d' ' -f1)\" = \"\$(cat '$backup_one/shell.json.sha256')\" && test \"\$(sha256sum '$backup_one/shell.json' | cut -d' ' -f1)\" = '$pre_accept_cfg'"
+
+# 2. Repeated acceptance and a previously dispatched restore do not modify the accepted install.
+mark=$(ncalls)
+check "repeated --accept fails without modifying accepted installation" fails branch --accept
+check "  accepted plugin unchanged after repeated --accept" \
+  test "$(tree_digest "$installed")" = "$accepted_plugin"
+check "  accepted shell.json unchanged after repeated --accept" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$accepted_cfg"
+check "  no duplicate backup created on repeated --accept" \
+  test "$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1
+check "  no shell restart on repeated --accept" \
+  fails bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
+
+check "previously dispatched restore cannot undo completed acceptance" \
+  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$sandbox/dispatched-branch-test.sh" --restore
+check "  accepted plugin unchanged after dispatched restore" \
+  test "$(tree_digest "$installed")" = "$accepted_plugin"
+check "  accepted shell.json unchanged after dispatched restore" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$accepted_cfg"
+
+# 3. Documented backup recovery restores the original snapshot while keeping the backup intact.
+cp -a "$backup_one" "$bt"
+chmod 700 "$bt"
+check "preserved backup is recoverable via branch-test --restore" branch --restore
+check "  original plugin restored byte-for-byte from backup" \
+  test "$(tree_digest "$installed")" = "$pre_accept_plugin"
+check "  original shell.json restored byte-for-byte from backup" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_accept_cfg"
+check "  backup directory itself remains preserved after recovery" \
+  test -d "$backup_one" -a -f "$backup_one/complete"
+
+# 4. Backup destination collision does not overwrite existing recovery data.
+branch --arm 30
+echo "// second accepted build" >"$installed/SECOND-BUILD"
+check "second acceptance creates a distinct backup without overwriting the first" branch --accept
+check "  two distinct backups now exist" \
+  test "$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 2
+check "  first backup remains intact and checksum-valid" \
+  bash -c "test \"\$(sha256sum '$backup_one/shell.json' | cut -d' ' -f1)\" = '$pre_accept_cfg' && test -f '$backup_one/complete'"
+rm -f "$installed/SECOND-BUILD"
+
+# 5. Missing, incomplete, unsafe or corrupted snapshots are rejected.
+branch --arm 30
+rm "$bt/complete"
+check "--accept rejects an incomplete snapshot" fails branch --accept
+check "  ...and keeps the login restore" test -e "$boot_unit"
+rm -rf "$bt" "$boot_unit"
+
+branch --arm 30
+chmod 755 "$bt"
+check "--accept rejects a non-private state directory" fails branch --accept
+check "  ...and keeps the snapshot and login restore" test -e "$bt/complete" -a -e "$boot_unit"
+chmod 700 "$bt"
+rm -rf "$bt" "$boot_unit"
+
+mkdir -p "$sandbox/accept-elsewhere" && ln -s "$sandbox/accept-elsewhere" "$bt"
+check "--accept rejects a symlinked state directory" fails branch --accept
+rm -f "$bt"
+
+branch --arm 30
+echo tampered >>"$bt/plugin/manifest.json"
+check "--accept rejects a corrupted snapshot plugin" fails branch --accept
+check "  ...and keeps the snapshot and login restore" test -e "$bt/complete" -a -e "$boot_unit"
+rm -rf "$bt" "$boot_unit"
+
+branch --arm 30
+printf '\n' >>"$bt/shell.json"
+check "--accept rejects a corrupted snapshot shell.json" fails branch --accept
+check "  ...and keeps the snapshot and login restore" test -e "$bt/complete" -a -e "$boot_unit"
+rm -rf "$bt" "$boot_unit"
+
+branch --arm 30
+chmod 755 "$bt_backups"
+check "--accept rejects a non-private backup root" fails branch --accept
+check "  ...and leaves the session armed for recovery" test -e "$bt/complete" -a ! -e "$bt/accepted" -a -e "$boot_unit"
+chmod 700 "$bt_backups"
+rm -rf "$bt" "$boot_unit"
+
+# 6. Changed selected bar or invalid current configuration/installation is rejected.
+branch --arm 30
+cp "$config" "$sandbox/cfg.keep"
+jq '.bar.id = "someone.else"' "$sandbox/cfg.keep" >"$config"
+check "--accept rejects when selected bar changed to another bar" fails branch --accept
+check "  ...and leaves the session armed" test -e "$bt/complete" -a ! -e "$bt/accepted" -a -e "$boot_unit"
+jq 'del(.bar.id)' "$sandbox/cfg.keep" >"$config"
+check "--accept rejects when selected bar reverted to stock" fails branch --accept
+printf '{ broken' >"$config"
+check "--accept rejects invalid current shell.json" fails branch --accept
+cp "$sandbox/cfg.keep" "$config"
+
+cp "$installed/manifest.json" "$sandbox/m.keep"
+jq '.id = "wrong.id"' "$sandbox/m.keep" >"$installed/manifest.json"
+check "--accept rejects invalid current plugin manifest" fails branch --accept
+check "  ...and leaves the session armed" test -e "$bt/complete" -a ! -e "$bt/accepted" -a -e "$boot_unit"
+cp "$sandbox/m.keep" "$installed/manifest.json"
+rm -rf "$bt" "$boot_unit"
+
+# 7. Concurrent acceptance and restoration, plus restore-in-progress refusal.
+branch --arm 30
+check "--accept refuses while lock is held by a running restore" \
+  bash -c "exec 8>'$bt/lock'; flock 8; ! env -i HOME='$home' PATH='$stubs:$OMARCHY/bin:/usr/bin:/bin' OMARCHY_PATH='$OMARCHY' SANDBOX_CALLS='$sandbox/calls.log' ISLANDS_BRANCH_TEST_DIR='$bt' '$repo/scripts/branch-test.sh' --accept >/dev/null 2>&1"
+check "  session stays armed after lock contention" test -e "$bt/complete" -a ! -e "$bt/accepted"
+
+# Locked-screen restore leaves $bt/restoring while waiting for --restart; --accept must refuse.
+touch "$sandbox/restart-fails"
+branch --restore
+check "--accept refuses after restore has already started (restart-retry window)" fails branch --accept
+rm -f "$sandbox/restart-fails"
+in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$bt/branch-test.sh" --restart 1 >/dev/null 2>&1
+
+# 8. Cleanup failures (timer stop / boot-unit disable) fail conservatively,
+#    protect the accepted bar from dispatched restores, and resume cleanly on retry.
+branch --arm 30
+echo "// cleanup-retry build" >"$installed/CLEANUP-RETRY"
+retry_plugin=$(tree_digest "$installed")
+retry_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+backups_before=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
+
+printf 'stop islands-branch-restore.timer' >"$sandbox/systemctl-fail"
+check "--accept fails when timer cleanup fails" fails branch --accept
+check "  acceptance marker is committed so dispatched restore cannot revert" test -f "$bt/accepted"
+check "  dispatched restore refuses to undo committed acceptance" \
+  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$bt/branch-test.sh" --restore
+check "  dispatched restart refuses to touch committed acceptance" \
+  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$bt/branch-test.sh" --restart 1
+check "  accepted plugin still intact after refused restore" \
+  test "$(tree_digest "$installed")" = "$retry_plugin"
+check "  accepted shell.json still intact after refused restore" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$retry_cfg"
+check "  --arm refuses while acceptance cleanup is pending" fails branch --arm 30
+check "  --status reports pending acceptance cleanup" \
+  bash -c "env -i HOME='$home' PATH='$stubs:$OMARCHY/bin:/usr/bin:/bin' OMARCHY_PATH='$OMARCHY' SANDBOX_CALLS='$sandbox/calls.log' ISLANDS_BRANCH_TEST_DIR='$bt' '$repo/scripts/branch-test.sh' --status | grep -q 'accepted (cleanup pending)'"
+
+# Clear timer-stop failure and re-run --accept: finishes cleanly without duplicating backup.
+rm -f "$sandbox/systemctl-fail"
+mark=$(ncalls)
+check "re-running --accept completes pending timer cleanup cleanly" branch --accept
+check "  armed state and boot unit are now removed" test ! -e "$bt" -a ! -e "$boot_unit"
+check "  no duplicate backup was created on cleanup resume" \
+  test "$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" = $((backups_before + 1))
+check "  accepted plugin unchanged byte-for-byte" \
+  test "$(tree_digest "$installed")" = "$retry_plugin"
+check "  accepted shell.json unchanged byte-for-byte" \
+  test "$(sha256sum "$config" | cut -d' ' -f1)" = "$retry_cfg"
+check "  no shell restart on cleanup resume" \
+  fails bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
+
+# Boot-unit disable failure on a fresh armed session also fails conservatively and resumes cleanly.
+branch --arm 30
+backups_before=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
+printf 'disable --quiet islands-branch-restore-boot.service' >"$sandbox/systemctl-fail"
+check "--accept fails when login-unit cleanup fails" fails branch --accept
+check "  acceptance marker and boot unit stay present without duplicating backup" \
+  bash -c "test -f '$bt/accepted' && test -e '$boot_unit' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
+check "  dispatched restore still refuses to revert after login-unit cleanup failure" \
+  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$bt/branch-test.sh" --restore
+rm -f "$sandbox/systemctl-fail"
+check "re-running --accept completes pending login-unit cleanup cleanly" branch --accept
+check "  armed state and boot unit are removed with no duplicate backup" \
+  bash -c "test ! -e '$bt' && test ! -e '$boot_unit' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
+rm -f "$installed/CLEANUP-RETRY"
 
 # -------------------------------------- identity migration & legacy compat
 # Verify canonical id (floating-islands) and legacy id (islands.bar) across
