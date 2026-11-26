@@ -351,7 +351,7 @@ jobs:
         timeout-minutes: 10
         run: tests/scripts/isolated.sh tests/scripts/sandbox.test.sh 2>&1 | tee "$LOGS/sandbox.log"
       - name: test counts
-        run: .github/ci/counts.sh "$LOGS" sandbox=132
+        run: .github/ci/counts.sh "$LOGS" sandbox=198
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
