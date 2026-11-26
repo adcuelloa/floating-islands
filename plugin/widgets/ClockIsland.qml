@@ -17,8 +17,8 @@ Island {
   property string tier: "full"
   property string timeFormat: "HH:mm"
   property var weekStartDay: null
-  // Maximum centred width available between fixed side groups (0 = unconstrained).
-  property real maximumWidth: 0
+  // Maximum centred width available between fixed side groups (< 0 = unconstrained).
+  property real maximumWidth: -1
   property var reach: ({ top: 0, bottom: 0 })
   // The bar facade panels coordinate through; without one (tests) the
   // calendar is not built.
@@ -172,12 +172,18 @@ Island {
   paddingRight: Math.round(6 * theme.m.scale)
 
   readonly property real chromeWidth: 2 * buttonPadding + paddingLeft + paddingRight + 2 * borderWidth + 1
-  readonly property real supplementaryWidth: (parts.date ? partGap + dateMetrics.advanceWidth : 0)
+  readonly property real fullSupplementaryWidth: (parts.date ? partGap + dateMetrics.advanceWidth : 0)
     + (parts.weekday ? wordGap + weekdayMetrics.advanceWidth : 0)
-  readonly property real naturalWidth: Math.ceil(timeSlot + supplementaryWidth + chromeWidth)
-  readonly property bool constrained: maximumWidth > 0 && naturalWidth > maximumWidth
-  readonly property real effectiveTimeSlot: constrained
-    ? Math.max(0, Math.floor(maximumWidth - chromeWidth - supplementaryWidth))
+  readonly property real dateOnlySupplementaryWidth: parts.date ? partGap + dateMetrics.advanceWidth : 0
+  readonly property real naturalWidth: Math.ceil(timeSlot + fullSupplementaryWidth + chromeWidth)
+  readonly property bool constrained: maximumWidth >= 0 && naturalWidth > maximumWidth
+  readonly property bool showWeekday: parts.weekday && (maximumWidth < 0 || Math.ceil(timeSlot + fullSupplementaryWidth + chromeWidth) <= maximumWidth)
+  readonly property bool showDate: parts.date && (showWeekday || maximumWidth < 0 || Math.ceil(timeSlot + dateOnlySupplementaryWidth + chromeWidth) <= maximumWidth)
+  readonly property real visibleSupplementaryWidth: (showDate ? partGap + dateMetrics.advanceWidth : 0)
+    + (showWeekday ? wordGap + weekdayMetrics.advanceWidth : 0)
+  readonly property bool timeElided: maximumWidth >= 0 && Math.ceil(timeSlot + visibleSupplementaryWidth + chromeWidth) > maximumWidth
+  readonly property real effectiveTimeSlot: timeElided
+    ? Math.max(0, Math.floor(maximumWidth - chromeWidth - visibleSupplementaryWidth))
     : timeSlot
 
   function demandForSlot(forTier, slot) {
@@ -274,11 +280,11 @@ Island {
 
         objectName: "clockTimePrefix"
         anchors.verticalCenter: parent.verticalCenter
-        width: root.constrained ? root.effectiveTimeSlot : root.prefixSlot
+        width: root.timeElided ? root.effectiveTimeSlot : root.prefixSlot
         horizontalAlignment: Text.AlignLeft
-        elide: root.constrained ? Text.ElideRight : Text.ElideNone
+        elide: root.timeElided ? Text.ElideRight : Text.ElideNone
         textFormat: Text.PlainText
-        text: root.constrained ? root.timeText : root.prefixTimeText
+        text: root.timeElided ? root.timeText : root.prefixTimeText
         color: root.theme.foreground
         font.family: root.theme.monoFamily
         font.pixelSize: root.theme.timeSize
@@ -293,7 +299,7 @@ Island {
         anchors.verticalCenter: parent.verticalCenter
         width: root.secondsRevealWidth
         height: prefixLabel.implicitHeight
-        visible: !root.constrained && root.timeTextParts.expandable && width > 0
+        visible: !root.timeElided && root.timeTextParts.expandable && width > 0
         clip: true
 
         Text {
@@ -316,7 +322,7 @@ Island {
         objectName: "clockTimeSuffix"
         anchors.verticalCenter: parent.verticalCenter
         width: root.suffixSlot
-        visible: !root.constrained && root.suffixTimeText !== ""
+        visible: !root.timeElided && root.suffixTimeText !== ""
         horizontalAlignment: Text.AlignLeft
         textFormat: Text.PlainText
         text: root.suffixTimeText
@@ -330,7 +336,7 @@ Island {
 
       objectName: "clockWeekday"
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.parts.weekday
+      visible: root.showWeekday
       leftPadding: root.partGap
       textFormat: Text.PlainText
       text: root.weekdayText
@@ -345,8 +351,8 @@ Island {
 
       objectName: "clockDate"
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.parts.date
-      leftPadding: root.parts.weekday ? root.wordGap : root.partGap
+      visible: root.showDate
+      leftPadding: root.showWeekday ? root.wordGap : root.partGap
       textFormat: Text.PlainText
       text: root.dateText
       color: root.theme.islandSecondaryText

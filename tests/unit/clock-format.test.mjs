@@ -275,3 +275,69 @@ test("F1-F2: persistClockFormat and persistWeekStart distinguish unchanged vs re
   assert.equal(wsRejected.accepted, false);
   assert.equal(wsRejected.status, "rejected");
 });
+
+test("pending-state persistence compares against accepted pending fields before barConfig reload", () => {
+  const staleCfg = ClockFormat.resolveClockConfig({
+    layout: { center: [{ id: "omarchy.clock", format: "HH:mm", weekStartDay: "monday" }] },
+  }, "islands");
+
+  /** @type {Record<string, unknown>} */
+  let stored = { id: "omarchy.clock", format: "HH:mm", weekStartDay: "monday" };
+  let rejectNext = false;
+  let inlineCalls = 0;
+  const shell = {
+    /**
+     * @param {string} _id
+     * @param {Record<string, unknown>} entry
+     */
+    updateEntryInline: (_id, entry) => {
+      inlineCalls++;
+      if (rejectNext) return false;
+      stored = { ...entry };
+      return true;
+    },
+  };
+
+  const state = {
+    _localClockFormat: "",
+    _localCustomClockFormats: /** @type {readonly string[] | null} */ (null),
+    _localWeekStartDay: "",
+    get clockFormat() {
+      return this._localClockFormat !== "" ? this._localClockFormat : staleCfg.format;
+    },
+    get effectiveWeekStart() {
+      const raw = this._localWeekStartDay !== "" ? this._localWeekStartDay : staleCfg.weekStartDay;
+      return ClockFormat.normalizedWeekStart(raw, 1);
+    },
+  };
+
+  // Toggle week start twice without reloading staleCfg.
+  const ws1 = ClockFormat.toggleWeekStartAction(state, shell, staleCfg, "islands");
+  assert.equal(ws1.status, "persisted");
+  assert.equal(stored.weekStartDay, "sunday");
+
+  const ws2 = ClockFormat.toggleWeekStartAction(state, shell, staleCfg, "islands");
+  assert.equal(ws2.status, "persisted");
+  assert.equal(ws2.method, "updateEntryInline");
+  assert.equal(stored.weekStartDay, "monday");
+
+  // Cycle full ring back to "HH:mm" without reloading staleCfg.
+  for (let i = 0; i < staleCfg.ring.length; i++) {
+    const out = ClockFormat.cycleClockFormatAction(state, shell, staleCfg, "islands");
+    assert.equal(out.accepted, true);
+    assert.equal(out.status, "persisted");
+  }
+  assert.equal(state.clockFormat, "HH:mm");
+  assert.equal(stored.format, "HH:mm");
+  assert.equal(inlineCalls, 2 + staleCfg.ring.length);
+
+  // Rejection after a prior accepted pending write rolls back to the prior accepted state.
+  const firstStep = ClockFormat.cycleClockFormatAction(state, shell, staleCfg, "islands");
+  assert.equal(firstStep.status, "persisted");
+  assert.equal(state.clockFormat, "h:mm AP");
+  rejectNext = true;
+  const rejectedStep = ClockFormat.cycleClockFormatAction(state, shell, staleCfg, "islands");
+  assert.equal(rejectedStep.accepted, false);
+  assert.equal(rejectedStep.status, "rejected");
+  assert.equal(state.clockFormat, "h:mm AP");
+});

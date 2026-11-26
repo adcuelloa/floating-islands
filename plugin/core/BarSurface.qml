@@ -112,10 +112,12 @@ PanelWindow {
   onDemandsChanged: Qt.callLater(surface.updateTier)
   onScreenWidthChanged: Qt.callLater(surface.updateTier)
 
-  readonly property real clockAvailableWidth: Layout.maxCenterWidth(screenWidth, leftWidth, rightFor(tier), m)
+  readonly property real clockAvailableWidth: screenWidth > 0
+    ? Layout.maxCenterWidth(screenWidth, leftWidth, rightFor(tier), m)
+    : -1
   readonly property real activeClockWidth: {
     var natural = clock.demandFor(tier)
-    var capped = clockAvailableWidth > 0 ? Math.min(natural, clockAvailableWidth) : natural
+    var capped = clockAvailableWidth >= 0 ? Math.min(natural, clockAvailableWidth) : natural
     return Math.max(capped, Math.ceil(clock.implicitWidth))
   }
   readonly property real titleMaxWidth: titleWanted

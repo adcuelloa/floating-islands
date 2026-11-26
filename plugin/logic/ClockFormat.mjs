@@ -820,7 +820,7 @@ export function persistClockFormat(shell, cfg, nextClockFormat, options) {
   const nextEntry = buildInlineClockEntry(mergedNative, nextClockFormat);
 
   if (!needsCoherentMutation) {
-    const currentEntry = buildInlineClockEntryWithFields(cfg.nativeSettings, {});
+    const currentEntry = buildInlineClockEntryWithFields(mergedNative, {});
     if (canonicalJson(currentEntry) === canonicalJson(nextEntry)) {
       return { accepted: true, status: "unchanged", method: "none", durableConfirmed: false };
     }
@@ -872,7 +872,7 @@ export function persistWeekStart(shell, cfg, nextWeekStartName, options) {
   const nextEntry = buildInlineClockEntryWithFields(mergedNative, { weekStartDay: nextWeekStartName });
 
   if (!needsCoherentMutation) {
-    const currentEntry = buildInlineClockEntryWithFields(cfg.nativeSettings, {});
+    const currentEntry = buildInlineClockEntryWithFields(mergedNative, {});
     if (canonicalJson(currentEntry) === canonicalJson(nextEntry)) {
       return { accepted: true, status: "unchanged", method: "none", durableConfirmed: false };
     }
@@ -914,6 +914,28 @@ export function persistWeekStart(shell, cfg, nextWeekStartName, options) {
  */
 
 /**
+ * Returns the pending native `omarchy.clock` fields already accepted in-memory
+ * by the host shell since the last `barConfig` reload, or `null` if none.
+ *
+ * @param {ClockBarState} state
+ * @returns {Record<string, unknown> | null}
+ */
+function pendingNativeState(state) {
+  /** @type {Record<string, unknown>} */
+  const pending = {};
+  let hasAny = false;
+  if (state._localClockFormat !== "") {
+    pending.format = state._localClockFormat;
+    hasAny = true;
+  }
+  if (state._localWeekStartDay !== "") {
+    pending.weekStartDay = state._localWeekStartDay;
+    hasAny = true;
+  }
+  return hasAny ? pending : null;
+}
+
+/**
  * Production orchestration helper used directly by `Bar.cycleClockFormat()`.
  * Advances the active format through the ring, applies optimistic state,
  * persists via `persistClockFormat`, and reconciles or reverts on rejection.
@@ -937,7 +959,7 @@ export function cycleClockFormatAction(state, shell, cfg, settingsKey) {
   const nextCustom = retainCustomFormat(activeCustom, current, cfg.formatAlt);
   const prevLocalFormat = state._localClockFormat;
   const prevLocalCustom = state._localCustomClockFormats;
-  const pendingNative = state._localWeekStartDay !== "" ? { weekStartDay: state._localWeekStartDay } : null;
+  const pendingNative = pendingNativeState(state);
 
   state._localClockFormat = next;
   state._localCustomClockFormats = nextCustom;
@@ -948,12 +970,9 @@ export function cycleClockFormatAction(state, shell, cfg, settingsKey) {
     pendingNativeFields: pendingNative,
     pendingCustomFormats: activeCustom
   });
-  if (!outcome.accepted) {
+  if (!outcome.accepted || outcome.status === "unchanged") {
     state._localClockFormat = prevLocalFormat;
     state._localCustomClockFormats = prevLocalCustom;
-  } else if (outcome.status === "unchanged") {
-    state._localClockFormat = "";
-    state._localCustomClockFormats = null;
   }
   return outcome;
 }
@@ -973,17 +992,15 @@ export function toggleWeekStartAction(state, shell, cfg, settingsKey) {
   const nextIndex = toggledWeekStart(state.effectiveWeekStart);
   const nextName = weekStartSettingName(nextIndex);
   const prevLocalWeekStart = state._localWeekStartDay;
-  const pendingNative = state._localClockFormat !== "" ? { format: state._localClockFormat } : null;
+  const pendingNative = pendingNativeState(state);
 
   state._localWeekStartDay = nextName;
   const outcome = persistWeekStart(shell, cfg, nextName, {
     settingsKey: settingsKey || "islands",
     pendingNativeFields: pendingNative
   });
-  if (!outcome.accepted) {
+  if (!outcome.accepted || outcome.status === "unchanged") {
     state._localWeekStartDay = prevLocalWeekStart;
-  } else if (outcome.status === "unchanged") {
-    state._localWeekStartDay = "";
   }
   return outcome;
 }

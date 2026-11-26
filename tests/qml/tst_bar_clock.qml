@@ -428,5 +428,55 @@ Item {
       compare(Commons.Util.ran.length, 1)
       compare(Commons.Util.ran[0], "omarchy-menu-timezone")
     }
+
+    function test_delayedReloadRoundTripPersistsFinalState() {
+      var store = makeStore({
+        id: "floating-islands",
+        islands: { locale: "en" },
+        layout: {
+          center: [{ id: "omarchy.clock", format: "HH:mm", weekStartDay: "monday" }]
+        }
+      })
+      var ref = { item: null }
+      var shell = makeShell(store, ref, { autoReload: false })
+      var host = createHost(store.bar, shell)
+      ref.item = host
+
+      // Toggle week start twice before barConfig reloads: second write must
+      // persist back to "monday" instead of being skipped against stale cfg.
+      var ws1 = host.toggleWeekStart()
+      verify(ws1.accepted)
+      compare(ws1.status, "persisted")
+      compare(ws1.method, "updateEntryInline")
+      compare(store.bar.layout.center[0].weekStartDay, "sunday")
+      compare(host.effectiveWeekStart, 0)
+
+      var ws2 = host.toggleWeekStart()
+      verify(ws2.accepted)
+      compare(ws2.status, "persisted")
+      compare(ws2.method, "updateEntryInline")
+      compare(store.bar.layout.center[0].weekStartDay, "monday")
+      compare(host.effectiveWeekStart, 1)
+
+      // Cycle format all the way around the ring back to the originally
+      // configured "HH:mm" before barConfig reloads: final write must persist.
+      var ringLen = host.clockConfig.ring.length
+      var lastOutcome = null
+      for (var i = 0; i < ringLen; i++) {
+        lastOutcome = host.cycleClockFormat()
+        verify(lastOutcome.accepted)
+        compare(lastOutcome.status, "persisted")
+        compare(lastOutcome.method, "updateEntryInline")
+      }
+      compare(host.clockFormat, "HH:mm")
+      compare(store.bar.layout.center[0].format, "HH:mm")
+      compare(store.bar.layout.center[0].weekStartDay, "monday")
+      compare(shell.state.inlineCalls.length, 2 + ringLen)
+
+      // Simulated delayed barConfig reload matches the final persisted state.
+      host.barConfig = JSON.parse(JSON.stringify(store.bar))
+      compare(host.clockFormat, "HH:mm")
+      compare(host.effectiveWeekStart, 1)
+    }
   }
 }

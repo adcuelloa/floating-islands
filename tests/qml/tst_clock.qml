@@ -69,7 +69,7 @@ Item {
       Commons.Style.spacing.scale = 1
       clock.tier = "full"
       clock.timeFormat = "HH:mm"
-      clock.maximumWidth = 0
+      clock.maximumWidth = -1
       clock.localeTag = "en-GB"
       clock.opened = false
       clock.detailed = false
@@ -88,7 +88,7 @@ Item {
       clock.opened = false
       clock.detailed = false
       clock.timeFormat = "HH:mm"
-      clock.maximumWidth = 0
+      clock.maximumWidth = -1
       clock.localeTag = "en-GB"
       clock.tier = "full"
       var sysClock = findChild(clock, "systemClock")
@@ -818,6 +818,110 @@ Item {
       // Fixed side groups alone exceeding screen width returns 0 (pre-existing
       // overflow, distinct from clock-induced overlap).
       compare(Layout.maxCenterWidth(600, 320, 320, theme.m), 0)
+    }
+
+    function test_zeroWidthSentinelStaysConstrainedAndRecovers() {
+      var weekday = findChild(clock, "clockWeekday")
+      var date = findChild(clock, "clockDate")
+      verify(weekday !== null && date !== null)
+
+      clock.tier = "full"
+      clock.timeFormat = "HH:mm"
+      compare(clock.maximumWidth, -1, "default maximumWidth uses negative unconstrained sentinel")
+      verify(!clock.constrained)
+      var fullNatural = clock.naturalWidth
+
+      // Positive narrow width constrains the clock.
+      var narrowCap = Math.ceil(clock.timeSlot + clock.chromeWidth) + 2
+      clock.maximumWidth = narrowCap
+      verify(clock.constrained)
+      tryVerify(function() { return clock.implicitWidth <= narrowCap }, 200)
+
+      // Zero available width must keep the clock constrained at its minimum
+      // interactive floor and never restore full natural width.
+      clock.maximumWidth = 0
+      verify(clock.constrained, "maximumWidth === 0 is a real constraint, not unconstrained")
+      compare(clock.effectiveTimeSlot, 0)
+      verify(!weekday.visible && !date.visible, "supplementary labels suppressed at zero available width")
+      var minInteractiveIsland = theme.m.buttonMinWidth + clock.paddingLeft + clock.paddingRight + 2 * clock.borderWidth
+      tryVerify(function() { return clock.implicitWidth === minInteractiveIsland }, 200, "stays at minimum interactive clock width (" + minInteractiveIsland + ", actual " + clock.implicitWidth + ")")
+      verify(clock.implicitWidth < fullNatural, "never restores naturalWidth when available width reaches zero")
+
+      // BarSurface activeClockWidth formula respects zero available width.
+      var naturalDemand = clock.demandFor(clock.tier)
+      var zeroCapped = 0 >= 0 ? Math.min(naturalDemand, 0) : naturalDemand
+      var activeAtZero = Math.max(zeroCapped, Math.ceil(clock.implicitWidth))
+      compare(activeAtZero, Math.ceil(clock.implicitWidth))
+      verify(activeAtZero < naturalDemand)
+
+      // Positive wide width recovers cleanly.
+      clock.maximumWidth = fullNatural + 40
+      verify(!clock.constrained)
+      verify(weekday.visible && date.visible, "supplementary labels restored on recovery")
+      compare(clock.tier, "full")
+      compare(clock.timeFormat, "HH:mm")
+    }
+
+    function test_forcedTierSuppressesSupplementaryLabelsWhenNarrowAndRestores() {
+      var prefix = findChild(clock, "clockTimePrefix")
+      var weekday = findChild(clock, "clockWeekday")
+      var date = findChild(clock, "clockDate")
+      verify(prefix !== null && weekday !== null && date !== null)
+
+      // Forced full tier with time-only format.
+      clock.tier = "full"
+      clock.timeFormat = "HH:mm"
+      clock.maximumWidth = -1
+      verify(weekday.visible && date.visible)
+
+      // Step 1: fits time + date, not weekday -> weekday suppressed, date kept.
+      var dateFitCap = Math.ceil(clock.timeSlot + clock.dateOnlySupplementaryWidth + clock.chromeWidth) + 2
+      verify(dateFitCap < clock.naturalWidth)
+      clock.maximumWidth = dateFitCap
+      verify(clock.constrained)
+      verify(!weekday.visible, "weekday suppressed when full tier exceeds available width")
+      verify(date.visible, "date preserved while time + date fits")
+      verify(!clock.timeElided)
+      compare(prefix.elide, Text.ElideNone)
+      tryVerify(function() { return clock.implicitWidth <= dateFitCap }, 200, "width bounded with date only")
+
+      // Step 2: fits time only -> both weekday and date suppressed, time stays unelided.
+      var timeFitCap = Math.ceil(clock.timeSlot + clock.chromeWidth) + 2
+      verify(timeFitCap < dateFitCap)
+      clock.maximumWidth = timeFitCap
+      verify(clock.constrained)
+      verify(!weekday.visible && !date.visible, "both supplementary labels suppressed when only time fits")
+      verify(!clock.timeElided)
+      compare(prefix.elide, Text.ElideNone)
+      tryVerify(function() { return clock.implicitWidth <= timeFitCap }, 200, "width bounded with time only")
+
+      // Step 3: narrower than time + chrome (above minimum button floor) -> time elides cleanly.
+      var elideCap = Math.max(theme.m.buttonMinWidth + clock.paddingLeft + clock.paddingRight + 2 * clock.borderWidth + 4, Math.ceil(clock.chromeWidth + 16))
+      verify(elideCap < timeFitCap)
+      clock.maximumWidth = elideCap
+      verify(clock.constrained && clock.timeElided)
+      verify(!weekday.visible && !date.visible)
+      compare(prefix.elide, Text.ElideRight)
+      tryVerify(function() { return clock.implicitWidth <= elideCap }, 200, "elided time bounded to " + elideCap)
+      compare(clock.tier, "full", "configured tier preserved")
+      compare(clock.timeFormat, "HH:mm", "selected format preserved")
+
+      // Step 4: widening restores both supplementary labels automatically.
+      clock.maximumWidth = clock.naturalWidth + 24
+      verify(!clock.constrained && !clock.timeElided)
+      verify(weekday.visible && date.visible, "supplementary labels restored automatically")
+
+      // Forced compact tier suppresses date when narrow and restores when widened.
+      clock.tier = "compact"
+      clock.maximumWidth = -1
+      verify(!weekday.visible && date.visible)
+      clock.maximumWidth = timeFitCap
+      verify(clock.constrained && !clock.timeElided)
+      verify(!date.visible, "compact date suppressed when narrow")
+      tryVerify(function() { return clock.implicitWidth <= timeFitCap }, 200)
+      compare(clock.tier, "compact")
+      clock.maximumWidth = clock.naturalWidth + 24
+      verify(!clock.constrained && date.visible, "compact date restored when widened")
     }
   }
 }

@@ -166,6 +166,19 @@ In this MVP the right side holds the hosted widgets, so live tiers will
 differ from the fixture according to what the user hosts. The rule is the
 same.
 
+**Narrow-width clock degradation and physical floor.** When the available
+centred space between the fixed side groups is narrower than the clock's
+natural width (including manually forced `full` or `compact` tiers),
+`ClockIsland` suppresses supplementary weekday and date labels first and then
+elides the time string with right-ellipses, preserving the configured tier and
+selected format and restoring everything automatically as soon as space
+returns. If fixed side groups alone leave less centred width than the clock's
+minimum interactive button size (`buttonMinWidth` plus island padding and
+border, 54 px at default scale), the clock stays constrained at that minimum
+interactive floor rather than restoring its full natural width; preventing
+overlap in that physically over-subscribed configuration requires widening the
+output, hiding optional widgets, or using `auto` tier selection.
+
 ## Platform and Control Center Constraints
 
 1. **Replacement bars are less trusted than the stock bar.** Hosted widgets
