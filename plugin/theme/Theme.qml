@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons as Commons
-import "../geometry/Layout.js" as Layout
+import "../geometry/Layout.mjs" as Layout
 import "Palette.js" as Palette
 
 // The design's tokens, resolved against the live Omarchy theme. One instance

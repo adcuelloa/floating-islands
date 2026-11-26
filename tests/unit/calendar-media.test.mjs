@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load } from "./qmljs.mjs";
+import * as CF from "../../plugin/logic/ClockFormat.mjs";
 
 const C = load("logic/Calendar.js");
-const CF = load("logic/ClockFormat.js");
 const M = load("logic/Media.js");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const day = (year, month, d) => ({ year, month, day: d });

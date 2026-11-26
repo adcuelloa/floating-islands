@@ -157,7 +157,7 @@ jobs:
         run: |
           .github/ci/bootstrap.sh "$CI_USER" "$CI_UID"
           mkdir -p "$LOGS"
-          { pacman -Q omarchy quickshell qt6-base qt6-declarative nodejs fontconfig noto-fonts; node --version; uname -r; } | tee "$LOGS/environment.log"
+          { pacman -Q omarchy quickshell qt6-base qt6-declarative nodejs pnpm fontconfig noto-fonts; node --version; pnpm --version; uname -r; } | tee "$LOGS/environment.log"
 
       - name: omarchy plugin validate
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
@@ -187,6 +187,18 @@ jobs:
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         timeout-minutes: 5
         run: runuser -u "$CI_USER" -- node --test --test-reporter=tap tests/unit/*.test.mjs 2>&1 | tee "$LOGS/node.log"
+      - name: install dev typecheck tooling
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          runuser -u "$CI_USER" -- pnpm install --frozen-lockfile --ignore-scripts 2>&1 | tee "$LOGS/pnpm-install.log"
+      - name: typecheck (tsc --noEmit)
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          runuser -u "$CI_USER" -- tests/typecheck.sh 2>&1 | tee "$LOGS/typecheck.log"
       - name: component tests (qmltestrunner, offscreen)
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         timeout-minutes: 10

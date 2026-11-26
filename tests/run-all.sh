@@ -35,6 +35,7 @@ step "qmllint" "$here/lint.sh"
 step "compatibility contract" "$here/contract/check-contract.sh" --quiet
 step "contract self-test" "$here/contract/self-test.sh"
 step "unit tests (node)" node --test "$here"/unit/*.test.mjs
+step "typecheck (tsc --noEmit)" "$here/typecheck.sh"
 step "component tests (qmltestrunner, offscreen)" qml_tests
 step "install / settings / rollback (sandbox, isolated)" "$here/scripts/isolated.sh" "$here/scripts/sandbox.test.sh"
 step "privacy" "$here/privacy.sh"

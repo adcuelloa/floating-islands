@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load } from "./qmljs.mjs";
 import { readFileSync } from "node:fs";
+import * as Clock from "../../plugin/logic/ClockFormat.mjs";
 
 const Title = load("logic/Title.js");
 const Settings = load("logic/Settings.js");
 const Palette = load("theme/Palette.js");
-const Clock = load("logic/ClockFormat.js");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test("titles are flattened, trimmed, bounded, and fall back to the app id", () => {

@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell
 import qs.Commons as Commons
 import "../components"
-import "../logic/ClockFormat.js" as ClockFormat
+import "../logic/ClockFormat.mjs" as ClockFormat
 import "../logic/Calendar.js" as Calendar
 
 // The centre island: the time in the mono face, then the date, whose weekday

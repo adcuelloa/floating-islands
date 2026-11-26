@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load } from "./qmljs.mjs";
+import * as Layout from "../../plugin/geometry/Layout.mjs";
 
 const CC = load("logic/ControlCenter.js");
-const Layout = load("geometry/Layout.js");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 // Stands in for the shell's first-party proxy (PluginFirstPartyServiceApi):

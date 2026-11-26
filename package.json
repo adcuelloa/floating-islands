@@ -1,0 +1,15 @@
+{
+  "name": "floating-islands-dev",
+  "private": true,
+  "description": "Development-only type-checking tooling for Floating Islands (not a plugin runtime dependency)",
+  "packageManager": "pnpm@12.16.1",
+  "scripts": {
+    "typecheck:qml": "tsc -p tsconfig.qml.json",
+    "typecheck:node": "tsc -p tsconfig.node.json",
+    "typecheck": "pnpm run typecheck:qml && pnpm run typecheck:node"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.10",
+    "typescript": "7.0.2"
+  }
+}

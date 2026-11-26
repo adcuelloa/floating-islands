@@ -41,11 +41,13 @@ Bar.qml ─ host contract, settings, trial mode, IPC
          └─ HitArea × 4 → mask    input only where the islands are
 ```
 
-Logic that can be pure is pure: `geometry/Layout.js` and the files in
-`logic/` and `theme/` (`Palette.js`, `Icons.js`). The node tests load these
-files directly. Views take a `theme` object and adapters by injection, so the
-QML tests drive them with stubs. Only `adapters/` and `core/BarSurface.qml`
-touch Quickshell's compositor types.
+Logic that can be pure is pure: `geometry/Layout.mjs` and the files in
+`logic/` and `theme/` (`ClockFormat.mjs`, `Palette.js`, `Icons.js`). Native
+`.mjs` modules are imported directly by both QML and Node unit tests (validated
+with strict TypeScript `checkJs` in development); legacy `.pragma library` `.js`
+modules are still loaded via `tests/unit/qmljs.mjs`. Views take a `theme` object
+and adapters by injection, so the QML tests drive them with stubs. Only
+`adapters/` and `core/BarSurface.qml` touch Quickshell's compositor types.
 
 ## Host contract
 

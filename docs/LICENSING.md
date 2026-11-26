@@ -52,7 +52,7 @@ The repository contains **no** wallpapers, themes, fonts, personal configuration
 
 ### Design-Token Provenance Review
 
-The numeric layout dimensions, surface alpha/contrast ratios, and animation durations in `plugin/theme/Theme.qml`, `plugin/theme/Palette.js`, and `plugin/geometry/Layout.js` were reviewed and recorded as ordinary functional layout, contrast, and timing parameters bound natively to Omarchy's `Commons.Color` and `Commons.Style` tokens (with reduced-motion routing through `Style.duration`). This review applies to the current tree and does not claim to retroactively resolve historical asset provenance in prior Git commits.
+The numeric layout dimensions, surface alpha/contrast ratios, and animation durations in `plugin/theme/Theme.qml`, `plugin/theme/Palette.js`, and `plugin/geometry/Layout.mjs` were reviewed and recorded as ordinary functional layout, contrast, and timing parameters bound natively to Omarchy's `Commons.Color` and `Commons.Style` tokens (with reduced-motion routing through `Style.duration`). This review applies to the current tree and does not claim to retroactively resolve historical asset provenance in prior Git commits.
 
 ## Runtime Dependencies (Used, Not Bundled)
 
