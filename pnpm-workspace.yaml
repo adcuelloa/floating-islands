@@ -1,4 +1,0 @@
-# pnpm v12 project config (not a monorepo/workspace): allow the exact pinned
-# @types/node@26.6.10 under pnpm's 24-hour minimumReleaseAge policy.
-minimumReleaseAgeExclude:
-  - '@types/node@26.6.10'
