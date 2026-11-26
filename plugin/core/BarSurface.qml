@@ -84,10 +84,11 @@ PanelWindow {
 
   readonly property real leftWidth: launcher.implicitWidth
   readonly property real hostedWidth: hosted.empty ? 0 : hosted.implicitWidth
-  // The media island is reserved at its expanded width whether or not
-  // anything plays, so starting playback never changes the tier.
+  // The media island is reserved at its minimum expanded width in full tier so
+  // optional media metadata can yield gracefully during transient tray
+  // expansion before forcing a bar-wide tier drop.
   function rightFor(forTier) {
-    var media = bar.settings.showMedia ? mediaIsland.demandFor(forTier) : 0
+    var media = bar.settings.showMedia ? mediaIsland.demandFor(forTier === "full" ? "compact" : forTier) : 0
     return hostedWidth + (media > 0 && hostedWidth > 0 ? m.groupGap : 0) + media
   }
   readonly property bool titleWanted: bar.settings.showTitle
@@ -103,16 +104,53 @@ PanelWindow {
   })
 
   property string autoTier: "full"
+  property var observedTierSlack: ({})
+  property string _slackKey: ""
   readonly property string tier: bar.settings.tier === "auto" ? autoTier : bar.settings.tier
 
   function updateTier() {
-    if (surface.screenWidth > 0) surface.autoTier = Layout.chooseTier(surface.screenWidth, surface.demands, surface.m, surface.autoTier)
+    if (surface.screenWidth <= 0) return
+    var key = surface.screenWidth + ":" + surface.bar.clockFormat
+    if (surface._slackKey !== key) {
+      surface._slackKey = key
+      surface.observedTierSlack = ({})
+    }
+    var next = Layout.chooseTier(surface.screenWidth, surface.demands, surface.m, surface.autoTier, surface.observedTierSlack)
+    surface.autoTier = next
+    var currentFit = Layout.fit(surface.screenWidth, surface.demands[next], surface.m)
+    if (currentFit.fits) {
+      var prevPeak = surface.observedTierSlack[next]
+      if (prevPeak === undefined || currentFit.slack > prevPeak) {
+        var updated = ({})
+        for (var k in surface.observedTierSlack) updated[k] = surface.observedTierSlack[k]
+        updated[next] = currentFit.slack
+        surface.observedTierSlack = updated
+      }
+    }
   }
 
   onDemandsChanged: Qt.callLater(surface.updateTier)
   onScreenWidthChanged: Qt.callLater(surface.updateTier)
 
-  readonly property real activeClockWidth: Math.max(clock.demandFor(tier), Math.ceil(clock.implicitWidth))
+  // Space remaining on the right side between the hosted island and the
+  // centred clock, so MediaIsland yields optional metadata smoothly when the
+  // tray expands and restores it when the tray collapses.
+  readonly property real mediaAvailableWidth: screenWidth > 0
+    ? Math.max(0, Math.floor(Layout.sideBudget(screenWidth, clock.maxDemandFor(tier), m) - hostedWidth - (hostedWidth > 0 ? m.groupGap : 0)))
+    : -1
+
+  // Actual visible right-group width (not expanded-media reservation), so
+  // ClockIsland only constrains when a visible right-side island would
+  // actually encroach on the centred clock.
+  readonly property real actualRightWidth: hostedWidth + (mediaIsland.visible ? (hostedWidth > 0 ? m.groupGap : 0) + mediaIsland.implicitWidth : 0)
+  readonly property real clockAvailableWidth: screenWidth > 0
+    ? Layout.maxCenterWidth(screenWidth, leftWidth, actualRightWidth, m)
+    : -1
+  readonly property real activeClockWidth: {
+    var natural = clock.demandFor(tier)
+    var capped = clockAvailableWidth >= 0 ? Math.min(natural, clockAvailableWidth) : natural
+    return Math.max(capped, Math.ceil(clock.implicitWidth))
+  }
   readonly property real titleMaxWidth: titleWanted
     ? Layout.titleWidth(tier, screenWidth, { center: activeClockWidth, leftFixed: demands[tier].leftFixed }, m)
     : 0
@@ -154,12 +192,16 @@ PanelWindow {
     theme: surface.theme
     strings: surface.bar.strings
     tier: surface.tier
-    timeFormat: surface.bar.settings.timeFormat
+    timeFormat: surface.bar.clockFormat
+    weekStartDay: surface.bar.clockWeekStartDay
+    maximumWidth: surface.clockAvailableWidth
     bar: surface.bar.nativeBar
     localeTag: surface.bar.localeTag
     reach: surface.reach
     x: Math.round((surface.width - width) / 2)
     y: surface.islandY
+    onCycleFormatRequested: surface.bar.cycleClockFormat()
+    onTimezoneRequested: surface.bar.openTimezoneSelector()
   }
 
   // Anchored to the right edge: the media island grows toward the clock and
@@ -179,6 +221,7 @@ PanelWindow {
       strings: surface.bar.strings
       tier: surface.tier
       equalizer: surface.bar.settings.mediaEqualizer
+      maximumWidth: surface.mediaAvailableWidth
       reach: surface.reach
       // Hyprland's focused workspace, read without taking focus.
       focusKey: Hyprland.focusedWorkspace ? String(Hyprland.focusedWorkspace.id) : ""
@@ -240,6 +283,10 @@ PanelWindow {
     clock.close()
   }
 
+  function refreshClock() {
+    clock.refresh()
+  }
+
   function toggleMedia() {
     if (!mediaIsland.visible) return "no-media"
     mediaIsland.togglePinned()
@@ -255,12 +302,19 @@ PanelWindow {
     // object; like the stock bar's sameWindow(), match by screen.
     readonly property var targetWindow: target && target.QsWindow ? target.QsWindow.window : null
     readonly property bool here: !!targetWindow && !!targetWindow.screen && String(targetWindow.screen.name || "") === surface.screenName
+    property point lastAnchorPoint: Qt.point(0, 0)
+
+    function syncAnchor() {
+      if (here && target) lastAnchorPoint = target.mapToItem(null, target.width / 2, 0)
+    }
+    onHereChanged: syncAnchor()
+    onTargetChanged: syncAnchor()
 
     theme: surface.theme
     text: surface.bar.tooltipText
     shown: surface.bar.tooltipShown && here
     surfaceWidth: surface.width
-    anchorPoint: here ? target.mapToItem(null, target.width / 2, 0) : Qt.point(0, 0)
+    anchorPoint: here && target ? target.mapToItem(null, target.width / 2, 0) : lastAnchorPoint
     // The same distance from the islands as every panel.
     y: surface.edge === "bottom"
       ? surface.islandY - height - surface.m.panelGap
@@ -313,6 +367,8 @@ PanelWindow {
       exclusiveZone: surface.exclusiveZone,
       hidden: surface.bar.barHidden,
       titleMaxWidth: surface.titleMaxWidth,
+      clockAvailableWidth: surface.clockAvailableWidth,
+      clockConstrained: clock.constrained,
       islands: {
         launcher: { x: leftGroup.x + launcher.x, y: launcher.y + surface.islandY, width: launcher.width, height: launcher.height },
         title: title.visible ? { x: leftGroup.x + title.x, y: surface.islandY, width: title.width, height: title.height } : null,

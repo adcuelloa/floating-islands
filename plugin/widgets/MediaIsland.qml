@@ -23,6 +23,8 @@ Island {
   required property var strings
   property string tier: "full"
   property string equalizer: "animated"
+  // Maximum width available beside the hosted island (< 0 = unconstrained).
+  property real maximumWidth: -1
   property var reach: ({ top: 0, bottom: 0 })
 
   readonly property var player: service ? service.activePlayer : null
@@ -30,7 +32,19 @@ Island {
   readonly property var track: Media.describe(player)
   readonly property bool hasMedia: mediaState === "playing" || mediaState === "paused"
   readonly property bool playing: mediaState === "playing"
-  readonly property bool showsTitle: tier === "full"
+  readonly property real s: theme.m.scale
+  readonly property real chromeWidth: paddingLeft + paddingRight + spacing + 2 * borderWidth
+  readonly property real fullMainWidth: Math.round(224 * s)
+  readonly property real compactMainWidth: Math.round(48 * s)
+  readonly property real titleMinMainWidth: Math.round(112 * s)
+  readonly property real controlsWidth: Math.round(132 * s)
+  readonly property real mainWidth: {
+    if (tier !== "full") return compactMainWidth
+    if (maximumWidth < 0) return fullMainWidth
+    var budget = Math.floor(maximumWidth - controlsWidth - chromeWidth)
+    return budget >= titleMinMainWidth ? Math.min(fullMainWidth, budget) : compactMainWidth
+  }
+  readonly property bool showsTitle: tier === "full" && mainWidth >= titleMinMainWidth
 
   // Three states: closed; previewing while the pointer rests on the island
   // (after previewDelay), which leaving ends; pinned by a click, which a second
@@ -71,9 +85,6 @@ Island {
   property string focusKey: ""
   onFocusKeyChanged: if (root.pinned) root.dismiss()
 
-  readonly property real s: theme.m.scale
-  readonly property real mainWidth: Math.round((showsTitle ? 224 : 48) * s)
-  readonly property real controlsWidth: Math.round(132 * s)
   property real progress: -1
 
   // The island's width when expanded in a tier, for the layout to reserve.
@@ -204,9 +215,14 @@ Island {
 
     objectName: "mediaMain"
     theme: root.theme
-    minimumWidth: root.mainWidth
+    minimumWidth: root.compactMainWidth
     width: root.mainWidth
     horizontalPadding: Math.round(10 * root.s)
+
+    Behavior on width {
+      enabled: root.theme.widget > 0
+      NumberAnimation { duration: root.theme.widget; easing.type: Easing.Bezier; easing.bezierCurve: root.theme.easeOut }
+    }
     contentSpacing: Math.round(10 * root.s)
     reachTop: root.reach.top
     reachBottom: root.reach.bottom
@@ -275,10 +291,12 @@ Island {
       readonly property real lineGap: Math.round(4 * root.s)
 
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.showsTitle
-      width: root.mainWidth - 2 * mainButton.horizontalPadding - equalizerBars.width - mainButton.contentSpacing
+      opacity: root.showsTitle ? 1 : 0
+      visible: opacity > 0 && width > 0
+      width: Math.max(0, mainButton.width - 2 * mainButton.horizontalPadding - equalizerBars.width - mainButton.contentSpacing)
       height: titleRow.height + (progressShown ? lineGap + progressLine.height : 0)
 
+      Behavior on opacity { enabled: root.theme.fast > 0; NumberAnimation { duration: root.theme.fast } }
       Behavior on height { NumberAnimation { duration: root.theme.widget; easing.type: Easing.OutCubic } }
 
       Row {

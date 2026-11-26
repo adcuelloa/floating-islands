@@ -236,6 +236,26 @@ export function sideBudget(screenWidth, centerWidth, m) {
 }
 
 /**
+ * Maximum width the centred clock may occupy without overlapping either fixed
+ * side group (respecting sideMargin and centerClearance). Returns 0 when the
+ * fixed side groups alone already leave no room for a centred slot.
+ *
+ * @param {number} screenWidth
+ * @param {number} leftFixed
+ * @param {number} rightFixed
+ * @param {Metrics} m
+ * @returns {number}
+ */
+export function maxCenterWidth(screenWidth, leftFixed, rightFixed, m) {
+  if (!isFinite(screenWidth) || screenWidth <= 0) return 0;
+  const left = isFinite(leftFixed) && leftFixed > 0 ? leftFixed : 0;
+  const right = isFinite(rightFixed) && rightFixed > 0 ? rightFixed : 0;
+  const widestSide = Math.max(left, right);
+  const available = Math.floor(screenWidth - 2 * (m.sideMargin + widestSide + m.centerClearance));
+  return Math.max(0, available);
+}
+
+/**
  * @param {number} screenWidth
  * @param {TierDemand} demand
  * @param {Metrics} m
@@ -249,17 +269,37 @@ export function fit(screenWidth, demand, m) {
 }
 
 /**
+ * Effective upward-recovery hysteresis for a tier: normally `hysteresis`,
+ * capped at `observedSlack` when the bar was already stably in that tier with
+ * positive slack below `hysteresis`, so returning to that steady state recovers
+ * instead of deadlocking.
+ *
+ * @param {number} hysteresis
+ * @param {number | null | undefined} observedSlack
+ * @returns {number}
+ */
+export function recoveryHysteresis(hysteresis, observedSlack) {
+  if (typeof observedSlack === "number" && isFinite(observedSlack) && observedSlack >= 0) {
+    return Math.min(hysteresis, observedSlack);
+  }
+  return hysteresis;
+}
+
+/**
  * The richest tier whose fixed islands fit beside the clock. Growing back to
- * a richer tier needs `hysteresis` px of slack, so a width that hovers at a
- * boundary (a tray icon appearing) does not flip the layout back and forth.
+ * a richer tier needs `hysteresis` px of slack (capped at any previously
+ * observed steady-state slack for that tier), so a width that hovers at a
+ * boundary (a tray icon appearing) does not flip the layout back and forth
+ * while returning to a prior collapsed state still recovers cleanly.
  *
  * @param {number} screenWidth
  * @param {TierDemands | null | undefined} demands
  * @param {Metrics} m
  * @param {Tier | null | undefined} [previous]
+ * @param {Partial<Record<Tier, number>> | null | undefined} [observedSlack]
  * @returns {Tier}
  */
-export function chooseTier(screenWidth, demands, m, previous) {
+export function chooseTier(screenWidth, demands, m, previous, observedSlack) {
   const previousIndex = previous ? TIERS.indexOf(previous) : -1;
   for (let i = 0; i < TIERS.length; i++) {
     const tier = TIERS[i];
@@ -268,7 +308,8 @@ export function chooseTier(screenWidth, demands, m, previous) {
     if (!demand) continue;
     const result = fit(screenWidth, demand, m);
     if (!result.fits) continue;
-    if (previousIndex > i && result.slack < m.hysteresis) continue;
+    const threshold = recoveryHysteresis(m.hysteresis, observedSlack ? observedSlack[tier] : undefined);
+    if (previousIndex > i && result.slack < threshold) continue;
     return tier;
   }
   return "minimal";

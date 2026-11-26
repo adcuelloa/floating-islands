@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import "../components"
 import "../logic/Calendar.js" as Calendar
+import "../logic/ClockFormat.mjs" as ClockFormat
 
 // The calendar panel's content, after the V2 design: the long weekday and
 // date, a hairline, the month with previous/next buttons, and a six-week
@@ -16,12 +17,13 @@ FocusScope {
   // A Date; the clock island's, so midnight rolls over without polling here.
   property date now: new Date()
   property string localeTag: "en-GB"
+  property var weekStartDay: null
 
   signal closeRequested()
 
   readonly property var locale: Qt.locale(localeTag)
   readonly property var pattern: Calendar.patterns(localeTag)
-  readonly property int weekStart: Calendar.weekStartFromLocale(locale.firstDayOfWeek)
+  readonly property int weekStart: ClockFormat.normalizedWeekStart(weekStartDay, Calendar.weekStartFromLocale(locale.firstDayOfWeek))
   readonly property var today: Calendar.dayOf(now)
 
   property var selected: Calendar.dayOf(new Date())

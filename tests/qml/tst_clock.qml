@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import qs.Commons as Commons
 import "../../plugin/geometry/Layout.mjs" as Layout
+import "../../plugin/logic/ClockFormat.mjs" as ClockFormat
 import "../../plugin/theme"
 import "../../plugin/widgets"
 
@@ -68,6 +69,7 @@ Item {
       Commons.Style.spacing.scale = 1
       clock.tier = "full"
       clock.timeFormat = "HH:mm"
+      clock.maximumWidth = -1
       clock.localeTag = "en-GB"
       clock.opened = false
       clock.detailed = false
@@ -86,6 +88,7 @@ Item {
       clock.opened = false
       clock.detailed = false
       clock.timeFormat = "HH:mm"
+      clock.maximumWidth = -1
       clock.localeTag = "en-GB"
       clock.tier = "full"
       var sysClock = findChild(clock, "systemClock")
@@ -520,6 +523,405 @@ Item {
 
     function test_islandHeight() {
       compare(clock.implicitHeight, 40)
+    }
+
+    function test_mouseButtonRouting() {
+      var cycleCount = 0
+      var tzCount = 0
+      var onCycle = function() { cycleCount++ }
+      var onTz = function() { tzCount++ }
+      clock.cycleFormatRequested.connect(onCycle)
+      clock.timezoneRequested.connect(onTz)
+
+      // Right-click cycles format without opening calendar or invoking timezone.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.RightButton)
+      compare(cycleCount, 1, "right-click emits cycleFormatRequested")
+      compare(tzCount, 0, "right-click does not emit timezoneRequested")
+      verify(!clock.opened, "right-click does not open calendar")
+
+      // Middle-click requests timezone without opening calendar or cycling format.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.MiddleButton)
+      compare(tzCount, 1, "middle-click emits timezoneRequested")
+      compare(cycleCount, 1, "middle-click does not cycle format")
+      verify(!clock.opened, "middle-click does not open calendar")
+
+      // Middle-click while calendar is open closes calendar and emits timezoneRequested.
+      clock.opened = true
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.MiddleButton)
+      verify(!clock.opened, "middle-click closes an open calendar")
+      compare(tzCount, 2, "middle-click emits timezoneRequested while calendar was open")
+      compare(cycleCount, 1, "middle-click still does not cycle format")
+
+      // Left-click does not trigger right/middle actions.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.LeftButton)
+      compare(cycleCount, 1, "left-click does not cycle format")
+      compare(tzCount, 2, "left-click does not open timezone")
+
+      clock.cycleFormatRequested.disconnect(onCycle)
+      clock.timezoneRequested.disconnect(onTz)
+    }
+
+    function test_nativeFormatsRenderWithoutDuplicateDateOrWeekday() {
+      Commons.Style.reduceMotion = true
+      var sysClock = findChild(clock, "systemClock")
+      if (sysClock) sysClock.date = new Date(2026, 9, 28, 9, 5, 42)
+      var weekdayLabel = findChild(clock, "clockWeekday")
+      var dateLabel = findChild(clock, "clockDate")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var suffix = findChild(clock, "clockTimeSuffix")
+      verify(weekdayLabel !== null && dateLabel !== null && prefix !== null && suffix !== null)
+
+      // Time-only preset keeps Floating Islands weekday + date labels in full tier.
+      clock.timeFormat = "HH:mm"
+      compare(clock.compactTimeText, "09:05")
+      compare(clock.detailTimeText, "09:05:42")
+      verify(weekdayLabel.visible, "time-only format shows accent weekday")
+      verify(dateLabel.visible, "time-only format shows muted date")
+
+      // Native weekday + 24h time: suppresses supplementary labels, still reveals seconds.
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.compactTimeText, "Wednesday 09:05")
+      compare(clock.detailTimeText, "Wednesday 09:05:42")
+      verify(!weekdayLabel.visible, "dddd HH:mm suppresses duplicate weekday")
+      verify(!dateLabel.visible, "dddd HH:mm suppresses supplementary date")
+      verify(clock.detailTimeSlot > clock.compactTimeSlot, "dddd HH:mm still expands for seconds")
+      clock.opened = true
+      compare(clock.timeSlot, clock.detailTimeSlot)
+      clock.opened = false
+
+      // Native weekday + 12h time: shifts AM/PM suffix cleanly, no duplicate weekday.
+      clock.timeFormat = "dddd h:mm AP"
+      compare(clock.compactTimeText, "Wednesday 9:05 AM")
+      compare(clock.detailTimeText, "Wednesday 9:05:42 AM")
+      compare(suffix.text, " AM")
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Explicit-seconds native format: constant width, no duplicate weekday.
+      clock.timeFormat = "dddd HH:mm:ss"
+      compare(clock.compactTimeText, "Wednesday 09:05:42")
+      verify(clock.secondsShown)
+      compare(clock.compactTimeSlot, clock.detailTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Native weekday + date + time: no duplicate weekday/date.
+      clock.timeFormat = "ddd d MMM HH:mm"
+      compare(clock.compactTimeText, "Wed 28 Oct 09:05")
+      compare(clock.detailTimeText, "Wed 28 Oct 09:05:42")
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Native date + ISO week (no time): expands ww, constant width, no seconds ticks.
+      clock.timeFormat = "d MMMM 'W'ww yyyy"
+      compare(clock.compactTimeText, "28 October W44 2026")
+      compare(clock.detailTimeText, "28 October W44 2026")
+      verify(!clock.secondsShown)
+      compare(clock.compactTimeSlot, clock.detailTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // ISO date + time: expands seconds, no duplicate date.
+      clock.timeFormat = "yyyy-MM-dd HH:mm"
+      compare(clock.compactTimeText, "2026-10-28 09:05")
+      compare(clock.detailTimeText, "2026-10-28 09:05:42")
+      verify(clock.detailTimeSlot > clock.compactTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Quoted literal containing 's' and 'd' does not falsely trigger seconds or hide date.
+      clock.timeFormat = "'Sat' HH:mm"
+      compare(clock.compactTimeText, "Sat 09:05")
+      compare(clock.detailTimeText, "Sat 09:05:42")
+      verify(!clock.hasExplicitSeconds, "quoted 's' is not a seconds token")
+      verify(!clock.secondsShown, "idle quoted-s format stays on minute ticks")
+      verify(weekdayLabel.visible && dateLabel.visible, "quoted literal does not suppress supplementary labels")
+    }
+
+    function test_persistenceAndTimezoneActionContract() {
+      // Simulate Omarchy's shell.json store + PluginShellApi.updateEntryInline
+      // and verify persistence, unrelated config preservation, and restart.
+      var store = {
+        version: 1,
+        bar: {
+          id: "floating-islands",
+          islands: { density: "comfortable" },
+          layout: {
+            center: [{ id: "omarchy.clock", format: "dddd HH:mm", formatAlt: "yyyy 'W'ww", weekStartDay: "monday" }],
+            right: [{ id: "omarchy.power" }]
+          }
+        },
+        idle: { lock: 300 }
+      }
+      var inlineCalls = []
+      var mutateCalls = 0
+      var shellStub = {
+        updateEntryInline: function(id, entry) {
+          inlineCalls.push({ id: id, entry: JSON.parse(JSON.stringify(entry)) })
+          var center = store.bar.layout.center
+          for (var i = 0; i < center.length; i++) {
+            if (center[i].id === id) {
+              center[i] = JSON.parse(JSON.stringify(entry))
+              return true
+            }
+          }
+          return false
+        },
+        mutateShellConfig: function(mutator) {
+          mutateCalls++
+          var scoped = { bar: JSON.parse(JSON.stringify(store.bar)) }
+          mutator(scoped)
+          store.bar = scoped.bar
+          return true
+        }
+      }
+
+      // Cycle once: dddd HH:mm -> dddd h:mm AP via updateEntryInline.
+      var cfg = ClockFormat.resolveClockConfig(store.bar, "islands")
+      var next = ClockFormat.nextFormat(cfg.ring, cfg.format)
+      compare(next, "dddd h:mm AP")
+      var ok = shellStub.updateEntryInline("omarchy.clock", ClockFormat.buildInlineClockEntry(cfg.nativeSettings, next))
+      verify(ok)
+      compare(inlineCalls.length, 1)
+      compare(mutateCalls, 0, "native updateEntryInline suffices without mutating bar.islands")
+
+      // Simulated restart: re-read from persisted store.
+      var afterRestart = ClockFormat.resolveClockConfig(store.bar, "islands")
+      compare(afterRestart.format, "dddd h:mm AP", "cycled format restored after simulated restart")
+      compare(afterRestart.formatAlt, "yyyy 'W'ww", "formatAlt preserved")
+      compare(store.bar.layout.center[0].weekStartDay, "monday", "unrelated clock keys preserved")
+      compare(store.bar.islands.density, "comfortable", "unrelated bar.islands keys preserved")
+      compare(store.idle.lock, 300, "unrelated top-level shell.json keys preserved")
+
+      // Middle-click timezone action uses fixed-argv Commons.Util.execArgv.
+      Commons.Util.ran = []
+      Commons.Util.execArgv(["omarchy-menu-timezone"])
+      compare(Commons.Util.ran.length, 1)
+      compare(Commons.Util.ran[0], "omarchy-menu-timezone")
+    }
+
+    function test_refreshUpdatesDisplayDate() {
+      var sysClock = findChild(clock, "systemClock")
+      if (sysClock) sysClock.date = new Date(2020, 0, 1, 0, 0, 0)
+      compare(clock.now.getFullYear(), 2020)
+      clock.refresh()
+      verify(clock.now.getFullYear() >= 2026, "refresh updates displayDate to current wall time")
+    }
+
+    // F3: Format changes update text and container geometry coherently in one
+    // step without animating from an incompatible previous text width, whether
+    // idle, hovered, calendar-open, or mid-seconds transition.
+    function test_formatChangeUpdatesGeometryCoherentlyWithoutOverflow() {
+      verify(theme.widget > 0, "animations enabled")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      var timeContainer = findChild(clock, "clockTime")
+      verify(prefix !== null && secondsClip !== null && timeContainer !== null)
+
+      // 1. Idle: short -> long -> short snaps timeSlot synchronously.
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot)
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "idle short->long snaps immediately")
+      verify(prefix.implicitWidth <= timeContainer.width + 0.5, "no transient overflow on idle short->long")
+      compare(secondsClip.width, 0, "no spurious seconds reveal on idle short->long")
+
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "idle long->short snaps immediately")
+      verify(Math.abs(timeContainer.width - clock.compactTimeSlot) <= 0.5, "no trailing empty space on idle long->short")
+      compare(secondsClip.width, 0, "no spurious seconds flash on idle long->short")
+
+      // 2. Hovered (detailed) and calendar-open: short -> long -> date-only -> short.
+      clock.detailed = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      clock.timeFormat = "dddd h:mm AP"
+      compare(clock.timeSlot, clock.detailTimeSlot, "hovered short->long settles coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on hovered short->long")
+
+      clock.timeFormat = "d MMMM 'W'ww yyyy"
+      compare(clock.timeSlot, clock.compactTimeSlot, "hovered time->date-only snaps coherently")
+      compare(secondsClip.width, 0)
+
+      clock.detailed = false
+      clock.opened = true
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.detailTimeSlot, "calendar-open date-only->short snaps coherently")
+      clock.timeFormat = "ddd d MMM h:mm AP"
+      compare(clock.timeSlot, clock.detailTimeSlot, "calendar-open short->long snaps coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on calendar-open short->long")
+      clock.opened = false
+      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+
+      // 3. During an active seconds reveal transition: format change snaps coherently.
+      clock.timeFormat = "HH:mm"
+      clock.opened = true
+      tryVerify(function() {
+        return clock.secondsProgress > 0.05 && clock.secondsProgress < 0.95
+      }, 500, "reached mid-seconds-reveal")
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.timeSlot, clock.detailTimeSlot, "mid-transition short->long snaps coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped after mid-transition format change")
+
+      clock.opened = false
+      tryVerify(function() {
+        return clock.secondsProgress > 0.05 && clock.secondsProgress < 0.95
+      }, 500, "reached mid-seconds-collapse")
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "mid-collapse long->short snaps coherently")
+      compare(secondsClip.width, 0)
+    }
+
+    // F5: Narrow-screen geometry constrains long native formats deterministically
+    // with readable elision, preserves center alignment and full stored format,
+    // and automatically restores unclipped progressive seconds when widened.
+    function test_narrowWidthDegradesWithElisionAndRecoversAutomatically() {
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      verify(prefix !== null && secondsClip !== null)
+
+      var longFormat = "dddd d MMMM 'W'ww yyyy HH:mm"
+      clock.tier = "minimal"
+      clock.timeFormat = longFormat
+      clock.localeTag = "es-ES"
+
+      // Narrow logical screen (800 px, e.g. 1280 @ 1.6x or 1024 @ 1.25x) with
+      // fixed side groups (240 left, 260 right): available centered slot (224 px)
+      // is smaller than the long localized format.
+      var narrowCap = Layout.maxCenterWidth(800, 240, 260, theme.m)
+      verify(narrowCap > 0, "valid positive centered budget on 800 px")
+      verify(clock.naturalWidth > narrowCap, "long localized format exceeds narrow budget (" + clock.naturalWidth + " > " + narrowCap + ")")
+
+      clock.maximumWidth = narrowCap
+      verify(clock.constrained, "clock enters constrained mode when naturalWidth > maximumWidth")
+      compare(clock.timeFormat, longFormat, "stored selected format is never mutated")
+      compare(prefix.elide, Text.ElideRight, "constrained clock uses readable right elision")
+      tryVerify(function() { return clock.implicitWidth <= narrowCap }, 200, "clock width bounded to " + narrowCap + " (actual " + clock.implicitWidth + ")")
+      verify(!secondsClip.visible, "split seconds clip hidden while elided")
+
+      // Increased font scaling + reduced motion stays bounded cleanly.
+      Commons.Style.reduceMotion = true
+      Commons.Style.fontScale = 1.25
+      Commons.Style.spacing.scale = 1.25
+      var scaledCap = Layout.maxCenterWidth(900, 240, 260, theme.m)
+      clock.maximumWidth = scaledCap
+      verify(clock.constrained)
+      tryVerify(function() { return clock.implicitWidth <= scaledCap }, 200, "scaled narrow clock bounded to " + scaledCap)
+
+      // Widening back to 1920 px restores full unclipped representation & seconds reveal.
+      Commons.Style.fontScale = 1
+      Commons.Style.spacing.scale = 1
+      Commons.Style.reduceMotion = false
+      var wideCap = Layout.maxCenterWidth(1920, 240, 260, theme.m)
+      clock.maximumWidth = wideCap
+      verify(!clock.constrained, "clock recovers automatically when space is sufficient")
+      compare(prefix.elide, Text.ElideNone, "elision cleared on recovery")
+      clock.opened = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      verify(secondsClip.visible && secondsClip.width === clock.secondsSlot, "progressive seconds reveal restored")
+      clock.opened = false
+
+      // Fixed side groups alone exceeding screen width returns 0 (pre-existing
+      // overflow, distinct from clock-induced overlap).
+      compare(Layout.maxCenterWidth(600, 320, 320, theme.m), 0)
+    }
+
+    function test_zeroWidthSentinelStaysConstrainedAndRecovers() {
+      var weekday = findChild(clock, "clockWeekday")
+      var date = findChild(clock, "clockDate")
+      verify(weekday !== null && date !== null)
+
+      clock.tier = "full"
+      clock.timeFormat = "HH:mm"
+      compare(clock.maximumWidth, -1, "default maximumWidth uses negative unconstrained sentinel")
+      verify(!clock.constrained)
+      var fullNatural = clock.naturalWidth
+
+      // Positive narrow width constrains the clock.
+      var narrowCap = Math.ceil(clock.timeSlot + clock.chromeWidth) + 2
+      clock.maximumWidth = narrowCap
+      verify(clock.constrained)
+      tryVerify(function() { return clock.implicitWidth <= narrowCap }, 200)
+
+      // Zero available width must keep the clock constrained at its minimum
+      // interactive floor and never restore full natural width.
+      clock.maximumWidth = 0
+      verify(clock.constrained, "maximumWidth === 0 is a real constraint, not unconstrained")
+      compare(clock.effectiveTimeSlot, 0)
+      verify(!weekday.visible && !date.visible, "supplementary labels suppressed at zero available width")
+      var minInteractiveIsland = theme.m.buttonMinWidth + clock.paddingLeft + clock.paddingRight + 2 * clock.borderWidth
+      tryVerify(function() { return clock.implicitWidth === minInteractiveIsland }, 200, "stays at minimum interactive clock width (" + minInteractiveIsland + ", actual " + clock.implicitWidth + ")")
+      verify(clock.implicitWidth < fullNatural, "never restores naturalWidth when available width reaches zero")
+
+      // BarSurface activeClockWidth formula respects zero available width.
+      var naturalDemand = clock.demandFor(clock.tier)
+      var zeroCapped = 0 >= 0 ? Math.min(naturalDemand, 0) : naturalDemand
+      var activeAtZero = Math.max(zeroCapped, Math.ceil(clock.implicitWidth))
+      compare(activeAtZero, Math.ceil(clock.implicitWidth))
+      verify(activeAtZero < naturalDemand)
+
+      // Positive wide width recovers cleanly.
+      clock.maximumWidth = fullNatural + 40
+      verify(!clock.constrained)
+      verify(weekday.visible && date.visible, "supplementary labels restored on recovery")
+      compare(clock.tier, "full")
+      compare(clock.timeFormat, "HH:mm")
+    }
+
+    function test_forcedTierSuppressesSupplementaryLabelsWhenNarrowAndRestores() {
+      var prefix = findChild(clock, "clockTimePrefix")
+      var weekday = findChild(clock, "clockWeekday")
+      var date = findChild(clock, "clockDate")
+      verify(prefix !== null && weekday !== null && date !== null)
+
+      // Forced full tier with time-only format.
+      clock.tier = "full"
+      clock.timeFormat = "HH:mm"
+      clock.maximumWidth = -1
+      verify(weekday.visible && date.visible)
+
+      // Step 1: fits time + date, not weekday -> weekday suppressed, date kept.
+      var dateFitCap = Math.ceil(clock.timeSlot + clock.dateOnlySupplementaryWidth + clock.chromeWidth) + 2
+      verify(dateFitCap < clock.naturalWidth)
+      clock.maximumWidth = dateFitCap
+      verify(clock.constrained)
+      verify(!weekday.visible, "weekday suppressed when full tier exceeds available width")
+      verify(date.visible, "date preserved while time + date fits")
+      verify(!clock.timeElided)
+      compare(prefix.elide, Text.ElideNone)
+      tryVerify(function() { return clock.implicitWidth <= dateFitCap }, 200, "width bounded with date only")
+
+      // Step 2: fits time only -> both weekday and date suppressed, time stays unelided.
+      var timeFitCap = Math.ceil(clock.timeSlot + clock.chromeWidth) + 2
+      verify(timeFitCap < dateFitCap)
+      clock.maximumWidth = timeFitCap
+      verify(clock.constrained)
+      verify(!weekday.visible && !date.visible, "both supplementary labels suppressed when only time fits")
+      verify(!clock.timeElided)
+      compare(prefix.elide, Text.ElideNone)
+      tryVerify(function() { return clock.implicitWidth <= timeFitCap }, 200, "width bounded with time only")
+
+      // Step 3: narrower than time + chrome (above minimum button floor) -> time elides cleanly.
+      var elideCap = Math.max(theme.m.buttonMinWidth + clock.paddingLeft + clock.paddingRight + 2 * clock.borderWidth + 4, Math.ceil(clock.chromeWidth + 16))
+      verify(elideCap < timeFitCap)
+      clock.maximumWidth = elideCap
+      verify(clock.constrained && clock.timeElided)
+      verify(!weekday.visible && !date.visible)
+      compare(prefix.elide, Text.ElideRight)
+      tryVerify(function() { return clock.implicitWidth <= elideCap }, 200, "elided time bounded to " + elideCap)
+      compare(clock.tier, "full", "configured tier preserved")
+      compare(clock.timeFormat, "HH:mm", "selected format preserved")
+
+      // Step 4: widening restores both supplementary labels automatically.
+      clock.maximumWidth = clock.naturalWidth + 24
+      verify(!clock.constrained && !clock.timeElided)
+      verify(weekday.visible && date.visible, "supplementary labels restored automatically")
+
+      // Forced compact tier suppresses date when narrow and restores when widened.
+      clock.tier = "compact"
+      clock.maximumWidth = -1
+      verify(!weekday.visible && date.visible)
+      clock.maximumWidth = timeFitCap
+      verify(clock.constrained && !clock.timeElided)
+      verify(!date.visible, "compact date suppressed when narrow")
+      tryVerify(function() { return clock.implicitWidth <= timeFitCap }, 200)
+      compare(clock.tier, "compact")
+      clock.maximumWidth = clock.naturalWidth + 24
+      verify(!clock.constrained && date.visible, "compact date restored when widened")
     }
   }
 }

@@ -59,6 +59,7 @@ Item {
       media.pinned = false
       mirror.pinned = false
       media.tier = "full"
+      media.maximumWidth = -1
       // A test that left the controls out sees them close here; hover tests
       // need the title back where it rests.
       tryCompare(findNamed(media, "mediaControls"), "width", 0)
@@ -256,6 +257,41 @@ Item {
     function test_reducedMotionStopsTheEqualizer() {
       Style.reduceMotion = true
       compare(theme.widget, 0)
+      Style.reduceMotion = false
+    }
+
+    function test_maximumWidthYieldsMetadataSmoothlyAndRestores() {
+      var main = findNamed(media, "mediaMain")
+      verify(main !== null)
+      media.tier = "full"
+      media.maximumWidth = -1
+      tryCompare(main, "width", media.fullMainWidth, 1000)
+      verify(media.showsTitle)
+
+      // Moderate tray expansion: metadata yields width smoothly without disappearing.
+      media.maximumWidth = 325
+      verify(media.showsTitle, "metadata stays visible when space allows readable title")
+      verify(media.mainWidth < media.fullMainWidth && media.mainWidth >= media.titleMinMainWidth)
+      tryCompare(main, "width", media.mainWidth, 1000)
+
+      // Tight space: collapses cleanly to compact equalizer pill.
+      media.maximumWidth = 235
+      verify(!media.showsTitle, "metadata hides when below titleMinMainWidth")
+      compare(media.mainWidth, media.compactMainWidth)
+      tryCompare(main, "width", media.compactMainWidth, 1000)
+
+      // Space returns: restores full metadata width smoothly.
+      media.maximumWidth = 383
+      verify(media.showsTitle)
+      compare(media.mainWidth, media.fullMainWidth)
+      tryCompare(main, "width", media.fullMainWidth, 1000)
+
+      // Reduced motion snaps width immediately.
+      Style.reduceMotion = true
+      media.maximumWidth = 235
+      compare(main.width, media.compactMainWidth)
+      media.maximumWidth = -1
+      compare(main.width, media.fullMainWidth)
       Style.reduceMotion = false
     }
   }

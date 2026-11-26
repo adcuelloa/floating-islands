@@ -22,7 +22,7 @@ Item {
   width: Math.min(label.implicitWidth + 2 * Math.round(10 * s), Math.round(360 * s))
   height: label.implicitHeight + 2 * Math.round(6 * s)
   opacity: shown && text !== "" ? 1 : 0
-  visible: opacity > 0
+  visible: shown && text !== ""
 
   Behavior on opacity { NumberAnimation { duration: root.shown ? root.theme.fast : 0 } }
 

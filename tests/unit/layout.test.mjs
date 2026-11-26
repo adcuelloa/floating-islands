@@ -121,3 +121,77 @@ test("dynamic clock width keeps tier stable via max demand while title reclaims 
   assert.ok(leftEdge + idleTitle + m.centerClearance <= idleClockLeft, "idle clearance preserved");
   assert.ok(leftEdge + expandedTitle + m.centerClearance <= expandedClockLeft, "expanded clearance preserved");
 });
+
+test("maxCenterWidth bounds centered clock and distinguishes clock overlap from fixed side-group overflow", () => {
+  const m = Layout.metrics(1, "compact");
+  // At 1024 px with left=240, right=260, sideMargin=12, centerClearance=16:
+  // available = 1024 - 2 * (12 + 260 + 16) = 448 px.
+  assert.equal(Layout.maxCenterWidth(1024, 240, 260, m), 448);
+  // Symmetric centered clock of width 448 clears both sides by >= centerClearance.
+  const budget = Layout.sideBudget(1024, 448, m);
+  assert.ok(budget >= 260, `sideBudget ${budget} >= 260`);
+
+  // When fixed side groups alone exceed the screen width, maxCenterWidth is 0.
+  assert.equal(Layout.maxCenterWidth(560, 280, 280, m), 0);
+  assert.equal(Layout.maxCenterWidth(0, 200, 200, m), 0);
+});
+
+test("actual visible right-group width avoids premature clock constraint when media is hidden or collapsed", () => {
+  const m = Layout.metrics(1, "compact");
+  const screenWidth = 1536;
+  const leftWidth = 272;
+  const hostedCollapsed = 232;
+  const hostedExpanded = 290;
+  const mediaCollapsed = 234;
+  const mediaExpanded = 366;
+
+  // Reserving expanded media (606 px) leaves only 268 px when idle/collapsed,
+  // and drops to 152 px during tray expansion before tier switches.
+  const reservedRightExpanded = hostedExpanded + m.groupGap + mediaExpanded;
+  assert.equal(Layout.maxCenterWidth(screenWidth, leftWidth, reservedRightExpanded, m), 152);
+
+  // Using actual visible right-group width keeps ample centered room when
+  // media is hidden (936 px, bounded by leftWidth) or collapsed during tray
+  // expansion (416 px).
+  const actualWhenHidden = hostedCollapsed;
+  assert.equal(Layout.maxCenterWidth(screenWidth, leftWidth, actualWhenHidden, m), 936);
+  const actualWhenCollapsedMediaAndTrayExpanded = hostedExpanded + m.groupGap + mediaCollapsed;
+  assert.equal(Layout.maxCenterWidth(screenWidth, leftWidth, actualWhenCollapsedMediaAndTrayExpanded, m), 416);
+});
+
+test("tier recovery breaks hysteresis deadlock when returning to collapsed tray baseline without losing hysteresis", () => {
+  const m = Layout.metrics(1, "compact");
+  const W = 1536;
+  const leftFixed = 280;
+  const mediaFull = 366;
+  const mediaCompact = 190;
+  const makeDemands = (/** @type {number} */ hosted) => ({
+    full: { center: 234, leftFixed, titleMin: m.titleMin, rightFixed: hosted + m.groupGap + mediaFull },
+    compact: { center: 185, leftFixed, titleMin: m.titleMin, rightFixed: hosted + m.groupGap + mediaCompact },
+    minimal: { center: 110, leftFixed: 272, titleMin: 0, rightFixed: hosted },
+  });
+
+  // Collapsed tray (232 px) starts in full with +17 px slack (< 24 px hysteresis).
+  const collapsed = makeDemands(232);
+  const baseSlack = Layout.fit(W, collapsed.full, m).slack;
+  assert.equal(baseSlack, 17);
+  assert.equal(Layout.chooseTier(W, collapsed, m, "full"), "full");
+
+  // Tray expands to 290 px -> drops to compact.
+  const expanded = makeDemands(290);
+  assert.equal(Layout.chooseTier(W, expanded, m, "full", { full: baseSlack }), "compact");
+
+  // Mid-collapse (245 px, slack = +4 < 17): hysteresis still holds compact.
+  const midCollapse = makeDemands(245);
+  assert.equal(Layout.fit(W, midCollapse.full, m).slack, 4);
+  assert.equal(Layout.chooseTier(W, midCollapse, m, "compact", { full: baseSlack }), "compact");
+
+  // Returning to collapsed baseline (232 px, slack = +17 >= 17): recovers to full.
+  assert.equal(Layout.chooseTier(W, collapsed, m, "compact", { full: baseSlack }), "full");
+
+  // Without prior observed slack, full 24 px hysteresis remains intact (1444 px stays compact).
+  assert.equal(Layout.chooseTier(1444, demands, m, "compact"), "compact");
+  assert.equal(Layout.recoveryHysteresis(24, 56), 24);
+  assert.equal(Layout.recoveryHysteresis(24, 17), 17);
+  assert.equal(Layout.recoveryHysteresis(24, undefined), 24);
+});

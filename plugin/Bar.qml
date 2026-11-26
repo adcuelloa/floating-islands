@@ -4,6 +4,7 @@ import Quickshell
 import qs.Commons as Commons
 import "core/Identity.js" as Identity
 import "geometry/Layout.mjs" as Layout
+import "logic/ClockFormat.mjs" as ClockFormat
 import "logic/Settings.js" as Settings
 import "logic/Trial.js" as Trial
 import "logic/Calendar.js" as Calendar
@@ -37,6 +38,19 @@ Item {
 
   readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : Identity.fallbackPluginId
   readonly property var settings: Settings.read(barConfig, Identity.settingsKey)
+  readonly property var clockConfig: ClockFormat.resolveClockConfig(barConfig, Identity.settingsKey)
+  property string _localClockFormat: ""
+  property var _localCustomClockFormats: null
+  property string _localWeekStartDay: ""
+  readonly property string clockFormat: _localClockFormat !== "" ? _localClockFormat : clockConfig.format
+  readonly property var clockWeekStartDay: _localWeekStartDay !== "" ? _localWeekStartDay : clockConfig.weekStartDay
+  readonly property var clockLocale: Qt.locale(localeTag)
+  readonly property int effectiveWeekStart: ClockFormat.normalizedWeekStart(clockWeekStartDay, clockLocale.firstDayOfWeek)
+  onBarConfigChanged: {
+    _localClockFormat = ""
+    _localCustomClockFormats = null
+    _localWeekStartDay = ""
+  }
   readonly property var hostedEntries: Settings.hostedEntries(barConfig, settings)
   readonly property var publicLayout: JSON.parse(JSON.stringify(barConfig && barConfig.layout ? barConfig.layout : {}))
   // The `locale` setting, or the Omarchy language.
@@ -163,6 +177,31 @@ Item {
     if (!toggled) Commons.Util.execArgv(["omarchy-shell", "shell", "toggle", "omarchy.menu", payload])
   }
 
+  // Right-click on the clock (or `omarchy.clock cycleFormat` IPC): walk the
+  // native horizontal format ring (plus retained custom formats) and persist
+  // through Omarchy's supported shell contracts (`updateEntryInline` for
+  // straightforward native object updates, single `mutateShellConfig` for
+  // legacy migration, custom-format retention, string-entry upgrade, or
+  // missing-entry fallback).
+  function cycleClockFormat() {
+    ClockFormat.cycleClockFormatAction(root, root.shell, root.clockConfig, Identity.settingsKey)
+  }
+
+  // `omarchy.clock toggleWeekStart` IPC: toggle calendar week start between
+  // Monday and Sunday using Omarchy's native semantics and persistence path.
+  function toggleWeekStart() {
+    ClockFormat.toggleWeekStartAction(root, root.shell, root.clockConfig, Identity.settingsKey)
+  }
+
+  // Middle-click on the clock: open Omarchy's native timezone selector.
+  function openTimezoneSelector() {
+    Commons.Util.execArgv(["omarchy-menu-timezone"])
+  }
+
+  function refreshClocks() {
+    for (var i = 0; i < root.surfaces.length; i++) root.surfaces[i].refreshClock()
+  }
+
   // ------------------------------------------------------------ tooltips
   // Hosted widgets ask through their facade; the surface the target is on
   // draws it. Shown after the pointer rests 400 ms, as on the stock bar.
@@ -234,6 +273,45 @@ Item {
 
     function syncHidden(): void {
       hiddenWatch.probe()
+    }
+  }
+
+  // Native clock IPC parity when Floating Islands replaces the stock bar
+  // (e.g. `omarchy-menu-timezone` calls `omarchy-shell -q omarchy.clock refresh`).
+  Commons.ShellIpc {
+    target: "omarchy.clock"
+
+    function refresh(): void {
+      root.refreshClocks()
+    }
+
+    function cycleFormat(): void {
+      root.cycleClockFormat()
+    }
+
+    function toggleWeekStart(): void {
+      root.toggleWeekStart()
+    }
+
+    function open(): void {
+      root.summonBarWidget("omarchy.clock")
+    }
+
+    function close(): void {
+      root.hideBarWidget("omarchy.clock")
+    }
+
+    function show(): void {
+      root.summonBarWidget("omarchy.clock")
+    }
+
+    function hide(): void {
+      root.hideBarWidget("omarchy.clock")
+    }
+
+    function toggle(): void {
+      if (root.isBarWidgetOpen("omarchy.clock")) root.hideBarWidget("omarchy.clock")
+      else root.summonBarWidget("omarchy.clock")
     }
   }
 

@@ -16,6 +16,9 @@ Island {
   required property var strings
   property string tier: "full"
   property string timeFormat: "HH:mm"
+  property var weekStartDay: null
+  // Maximum centred width available between fixed side groups (< 0 = unconstrained).
+  property real maximumWidth: -1
   property var reach: ({ top: 0, bottom: 0 })
   // The bar facade panels coordinate through; without one (tests) the
   // calendar is not built.
@@ -24,8 +27,11 @@ Island {
   // setting, or the Omarchy language.
   property string localeTag: Commons.I18n.formatLocale
 
-  readonly property var parts: ClockFormat.partsFor(tier)
+  readonly property var parts: ClockFormat.partsFor(tier, timeFormat)
   readonly property var locale: Qt.locale(localeTag)
+
+  signal cycleFormatRequested()
+  signal timezoneRequested()
 
   // ------------------------------------------------------------ calendar
   property bool opened: false
@@ -63,6 +69,7 @@ Island {
       var bindings = {
         now: function() { return root.now },
         localeTag: function() { return root.localeTag },
+        weekStartDay: function() { return root.weekStartDay },
         open: function() { return root.opened }
       }
       for (var name in bindings) panel[name] = Qt.binding(bindings[name])
@@ -85,16 +92,31 @@ Island {
     root.bar.registerClickTarget(clockButton)
     root.loadCalendar()
   }
-  readonly property date now: clock.date
+  property date displayDate: clock.date
+  readonly property date now: displayDate
+
+  function refresh() {
+    root.displayDate = new Date()
+  }
+
+  function formatDateTime(fmt) {
+    var formatDigit = typeof Commons.I18n.formatNumber === "function"
+      ? function(digit) { return Commons.I18n.formatNumber(digit) }
+      : null
+    var resolved = ClockFormat.expandIsoWeek(fmt, root.now, formatDigit)
+    return root.now.toLocaleString(root.locale, resolved)
+  }
+
   // Seconds show in the island after the pointer rests on the clock, and
   // for as long as the calendar is open (whether or not the pointer stays);
   // only then does the clock tick every second.
   readonly property int detailDelay: 400
   property bool detailed: false
-  readonly property bool secondsShown: detailed || opened || timeFormat.indexOf("s") !== -1
+  readonly property bool hasExplicitSeconds: ClockFormat.hasSecondsToken(timeFormat)
+  readonly property bool secondsShown: detailed || opened || hasExplicitSeconds
   readonly property string detailFormat: ClockFormat.withSeconds(timeFormat)
-  readonly property string detailTimeText: now.toLocaleString(locale, detailFormat)
-  readonly property string compactTimeText: now.toLocaleString(locale, timeFormat)
+  readonly property string detailTimeText: formatDateTime(detailFormat)
+  readonly property string compactTimeText: formatDateTime(timeFormat)
   readonly property var timeTextParts: ClockFormat.splitTimeText(compactTimeText, detailTimeText)
   readonly property string prefixTimeText: timeTextParts.prefix
   readonly property string secondsTimeText: timeTextParts.seconds
@@ -106,27 +128,41 @@ Island {
 
   // The time's slot: fits the idle time format by default, and expands to fit
   // seconds while hovered (after detailDelay), while the calendar is open, or
-  // when timeFormat explicitly includes seconds.
+  // when timeFormat explicitly includes seconds. Only the seconds reveal
+  // factor (0..1) animates, so changing timeFormat updates text and container
+  // geometry coherently in one step with no transient overflow or empty space.
   readonly property real prefixSlot: Math.ceil(prefixMetrics.advanceWidth)
   readonly property real secondsSlot: timeTextParts.expandable ? Math.ceil(secondsMetrics.advanceWidth) : 0
   readonly property real suffixSlot: suffixTimeText !== "" ? Math.ceil(suffixMetrics.advanceWidth) : 0
   readonly property real compactTimeSlot: prefixSlot + suffixSlot
   readonly property real detailTimeSlot: compactTimeSlot + secondsSlot
   readonly property real targetTimeSlot: secondsShown ? detailTimeSlot : compactTimeSlot
-  property real timeSlot: targetTimeSlot
-  readonly property real secondsRevealWidth: timeTextParts.expandable
-    ? Math.max(0, Math.min(secondsSlot, timeSlot - compactTimeSlot))
-    : 0
-  readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
+  readonly property real targetSecondsProgress: secondsShown ? 1 : 0
+  property bool _snappingFormat: false
+  property real secondsProgress: targetSecondsProgress
 
-  Behavior on timeSlot {
-    enabled: root.theme.widget > 0
+  Behavior on secondsProgress {
+    enabled: root.theme.widget > 0 && !root._snappingFormat
     NumberAnimation {
       duration: root.theme.widget
       easing.type: Easing.Bezier
       easing.bezierCurve: root.theme.easeOut
     }
   }
+
+  onTimeFormatChanged: {
+    var nextTarget = (root.detailed || root.opened || ClockFormat.hasSecondsToken(root.timeFormat)) ? 1 : 0
+    root._snappingFormat = true
+    root.secondsProgress = nextTarget
+    root.secondsProgress = Qt.binding(function() { return root.targetSecondsProgress })
+    root._snappingFormat = false
+  }
+
+  readonly property real secondsRevealWidth: timeTextParts.expandable
+    ? secondsSlot * secondsProgress
+    : 0
+  readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
+  readonly property real timeSlot: compactTimeSlot + secondsRevealWidth
 
   readonly property real buttonPadding: Math.round(14 * theme.m.scale)
   readonly property real partGap: Math.round(12 * theme.m.scale)
@@ -135,8 +171,23 @@ Island {
   paddingLeft: Math.round(6 * theme.m.scale)
   paddingRight: Math.round(6 * theme.m.scale)
 
+  readonly property real chromeWidth: 2 * buttonPadding + paddingLeft + paddingRight + 2 * borderWidth + 1
+  readonly property real fullSupplementaryWidth: (parts.date ? partGap + dateMetrics.advanceWidth : 0)
+    + (parts.weekday ? wordGap + weekdayMetrics.advanceWidth : 0)
+  readonly property real dateOnlySupplementaryWidth: parts.date ? partGap + dateMetrics.advanceWidth : 0
+  readonly property real naturalWidth: Math.ceil(timeSlot + fullSupplementaryWidth + chromeWidth)
+  readonly property bool constrained: maximumWidth >= 0 && naturalWidth > maximumWidth
+  readonly property bool showWeekday: parts.weekday && (maximumWidth < 0 || Math.ceil(timeSlot + fullSupplementaryWidth + chromeWidth) <= maximumWidth)
+  readonly property bool showDate: parts.date && (showWeekday || maximumWidth < 0 || Math.ceil(timeSlot + dateOnlySupplementaryWidth + chromeWidth) <= maximumWidth)
+  readonly property real visibleSupplementaryWidth: (showDate ? partGap + dateMetrics.advanceWidth : 0)
+    + (showWeekday ? wordGap + weekdayMetrics.advanceWidth : 0)
+  readonly property bool timeElided: maximumWidth >= 0 && Math.ceil(timeSlot + visibleSupplementaryWidth + chromeWidth) > maximumWidth
+  readonly property real effectiveTimeSlot: timeElided
+    ? Math.max(0, Math.floor(maximumWidth - chromeWidth - visibleSupplementaryWidth))
+    : timeSlot
+
   function demandForSlot(forTier, slot) {
-    var p = ClockFormat.partsFor(forTier)
+    var p = ClockFormat.partsFor(forTier, root.timeFormat)
     var inner = slot
     if (p.date) inner += partGap + dateMetrics.advanceWidth
     if (p.weekday) inner += wordGap + weekdayMetrics.advanceWidth
@@ -162,6 +213,7 @@ Island {
     id: clock
     objectName: "systemClock"
     precision: root.secondsShown ? SystemClock.Seconds : SystemClock.Minutes
+    onDateChanged: root.displayDate = date
   }
 
   // No keyboard focus: hovering only changes what the clock shows.
@@ -189,12 +241,20 @@ Island {
     id: clockButton
 
     // KeyboardPanel forwards a click on this button while the calendar is
-    // open, so the click toggles it rather than closing and reopening.
-    function triggerPress(button) { if (button === Qt.LeftButton) root.clickToggle() }
+    // open, so left-click toggles it rather than closing and reopening, right-
+    // click cycles the clock format, and middle-click opens the timezone menu.
+    function triggerPress(button) {
+      if (button === Qt.LeftButton) root.clickToggle()
+      else if (button === Qt.RightButton) root.cycleFormatRequested()
+      else if (button === Qt.MiddleButton) {
+        if (root.opened) root.close()
+        root.timezoneRequested()
+      }
+    }
 
     theme: root.theme
     active: root.opened
-    onClicked: function(button) { if (button === Qt.LeftButton) root.clickToggle() }
+    onClicked: function(button) { triggerPress(button) }
     horizontalPadding: root.buttonPadding
     contentSpacing: 0
     reachTop: root.reach.top
@@ -211,7 +271,7 @@ Island {
 
       objectName: "clockTime"
       anchors.verticalCenter: parent.verticalCenter
-      width: root.timeSlot
+      width: root.effectiveTimeSlot
       height: prefixLabel.implicitHeight
       spacing: 0
 
@@ -220,10 +280,11 @@ Island {
 
         objectName: "clockTimePrefix"
         anchors.verticalCenter: parent.verticalCenter
-        width: root.prefixSlot
+        width: root.timeElided ? root.effectiveTimeSlot : root.prefixSlot
         horizontalAlignment: Text.AlignLeft
+        elide: root.timeElided ? Text.ElideRight : Text.ElideNone
         textFormat: Text.PlainText
-        text: root.prefixTimeText
+        text: root.timeElided ? root.timeText : root.prefixTimeText
         color: root.theme.foreground
         font.family: root.theme.monoFamily
         font.pixelSize: root.theme.timeSize
@@ -238,7 +299,7 @@ Island {
         anchors.verticalCenter: parent.verticalCenter
         width: root.secondsRevealWidth
         height: prefixLabel.implicitHeight
-        visible: root.timeTextParts.expandable && width > 0
+        visible: !root.timeElided && root.timeTextParts.expandable && width > 0
         clip: true
 
         Text {
@@ -261,7 +322,7 @@ Island {
         objectName: "clockTimeSuffix"
         anchors.verticalCenter: parent.verticalCenter
         width: root.suffixSlot
-        visible: root.suffixTimeText !== ""
+        visible: !root.timeElided && root.suffixTimeText !== ""
         horizontalAlignment: Text.AlignLeft
         textFormat: Text.PlainText
         text: root.suffixTimeText
@@ -275,7 +336,7 @@ Island {
 
       objectName: "clockWeekday"
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.parts.weekday
+      visible: root.showWeekday
       leftPadding: root.partGap
       textFormat: Text.PlainText
       text: root.weekdayText
@@ -290,8 +351,8 @@ Island {
 
       objectName: "clockDate"
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.parts.date
-      leftPadding: root.parts.weekday ? root.wordGap : root.partGap
+      visible: root.showDate
+      leftPadding: root.showWeekday ? root.wordGap : root.partGap
       textFormat: Text.PlainText
       text: root.dateText
       color: root.theme.islandSecondaryText
