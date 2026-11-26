@@ -137,7 +137,7 @@ Configured under `bar.islands` in `~/.config/omarchy/shell.json` (hot-reloads au
 |---|---|---|
 | `density` | `compact` (40 px islands), `comfortable` (46 px) | `compact` |
 | `tier` | `auto`, `full`, `compact`, `minimal` | `auto` |
-| `timeFormat` | Qt time format string | `HH:mm` |
+| `timeFormat` | Qt time format string (legacy override; right-clicking the clock persists native `omarchy.clock` `format` in `bar.layout`) | `omarchy.clock` `format`, else `HH:mm` |
 | `showTitle` | boolean | `true` |
 | `hostWidgets` | boolean: host stock right-section widgets | `true` |
 | `hosted` | list of widget IDs to host instead of `bar.layout.right` | — |
@@ -152,7 +152,8 @@ Configured under `bar.islands` in `~/.config/omarchy/shell.json` (hot-reloads au
 `extraHosted` brings placed stock widgets from other sections into the status island without replacing `bar.layout.right`. They keep their named shortcuts (`SUPER+CTRL+ALT+E` for World Clock, `SUPER+CTRL+ALT+W` for Weather) without shifting `SUPER+CTRL+1..9`.
 
 **Shortcuts & IPC:**
-- Calendar (`SUPER+CTRL+ALT+D` / `omarchy.clock`) toggles the native calendar on the focused output.
+- Clock island: hover reveals seconds progressively; left-click toggles the native calendar (`SUPER+CTRL+ALT+D` / `omarchy.clock`); right-click cycles Omarchy's native horizontal format ring and persists to `omarchy.clock` via `updateEntryInline`; middle-click opens `omarchy-menu-timezone`.
+- `omarchy-shell omarchy.clock refresh|cycleFormat|open|close|show|hide|toggle` restores native clock IPC parity (`toggleWeekStart` is omitted because Floating Islands' calendar follows locale week start).
 - `omarchy-shell floating-islands toggleCalendar` / `toggleControlCenter` / `toggleMedia` toggle panels via IPC.
 - `omarchy-shell floating-islands geometry` / `slots` / `tooltip` report read-only diagnostics.
 - `bar.position: "bottom"` anchors islands to the bottom edge (left/right map to top).

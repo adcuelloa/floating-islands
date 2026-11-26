@@ -24,8 +24,11 @@ Island {
   // setting, or the Omarchy language.
   property string localeTag: Commons.I18n.formatLocale
 
-  readonly property var parts: ClockFormat.partsFor(tier)
+  readonly property var parts: ClockFormat.partsFor(tier, timeFormat)
   readonly property var locale: Qt.locale(localeTag)
+
+  signal cycleFormatRequested()
+  signal timezoneRequested()
 
   // ------------------------------------------------------------ calendar
   property bool opened: false
@@ -85,16 +88,31 @@ Island {
     root.bar.registerClickTarget(clockButton)
     root.loadCalendar()
   }
-  readonly property date now: clock.date
+  property date displayDate: clock.date
+  readonly property date now: displayDate
+
+  function refresh() {
+    root.displayDate = new Date()
+  }
+
+  function formatDateTime(fmt) {
+    var formatDigit = typeof Commons.I18n.formatNumber === "function"
+      ? function(digit) { return Commons.I18n.formatNumber(digit) }
+      : null
+    var resolved = ClockFormat.expandIsoWeek(fmt, root.now, formatDigit)
+    return root.now.toLocaleString(root.locale, resolved)
+  }
+
   // Seconds show in the island after the pointer rests on the clock, and
   // for as long as the calendar is open (whether or not the pointer stays);
   // only then does the clock tick every second.
   readonly property int detailDelay: 400
   property bool detailed: false
-  readonly property bool secondsShown: detailed || opened || timeFormat.indexOf("s") !== -1
+  readonly property bool hasExplicitSeconds: ClockFormat.hasSecondsToken(timeFormat)
+  readonly property bool secondsShown: detailed || opened || hasExplicitSeconds
   readonly property string detailFormat: ClockFormat.withSeconds(timeFormat)
-  readonly property string detailTimeText: now.toLocaleString(locale, detailFormat)
-  readonly property string compactTimeText: now.toLocaleString(locale, timeFormat)
+  readonly property string detailTimeText: formatDateTime(detailFormat)
+  readonly property string compactTimeText: formatDateTime(timeFormat)
   readonly property var timeTextParts: ClockFormat.splitTimeText(compactTimeText, detailTimeText)
   readonly property string prefixTimeText: timeTextParts.prefix
   readonly property string secondsTimeText: timeTextParts.seconds
@@ -136,7 +154,7 @@ Island {
   paddingRight: Math.round(6 * theme.m.scale)
 
   function demandForSlot(forTier, slot) {
-    var p = ClockFormat.partsFor(forTier)
+    var p = ClockFormat.partsFor(forTier, root.timeFormat)
     var inner = slot
     if (p.date) inner += partGap + dateMetrics.advanceWidth
     if (p.weekday) inner += wordGap + weekdayMetrics.advanceWidth
@@ -162,6 +180,7 @@ Island {
     id: clock
     objectName: "systemClock"
     precision: root.secondsShown ? SystemClock.Seconds : SystemClock.Minutes
+    onDateChanged: root.displayDate = date
   }
 
   // No keyboard focus: hovering only changes what the clock shows.
@@ -189,12 +208,20 @@ Island {
     id: clockButton
 
     // KeyboardPanel forwards a click on this button while the calendar is
-    // open, so the click toggles it rather than closing and reopening.
-    function triggerPress(button) { if (button === Qt.LeftButton) root.clickToggle() }
+    // open, so left-click toggles it rather than closing and reopening, right-
+    // click cycles the clock format, and middle-click opens the timezone menu.
+    function triggerPress(button) {
+      if (button === Qt.LeftButton) root.clickToggle()
+      else if (button === Qt.RightButton) root.cycleFormatRequested()
+      else if (button === Qt.MiddleButton) {
+        if (root.opened) root.close()
+        root.timezoneRequested()
+      }
+    }
 
     theme: root.theme
     active: root.opened
-    onClicked: function(button) { if (button === Qt.LeftButton) root.clickToggle() }
+    onClicked: function(button) { triggerPress(button) }
     horizontalPadding: root.buttonPadding
     contentSpacing: 0
     reachTop: root.reach.top

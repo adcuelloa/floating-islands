@@ -217,7 +217,7 @@ jobs:
         run: runuser -u "$CI_USER" -- .github/ci/retry.test.sh 2>&1 | tee "$LOGS/retry-self-test.log"
       - name: test counts
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
-        run: .github/ci/counts.sh "$LOGS" node=152 qml=270 contract=241
+        run: .github/ci/counts.sh "$LOGS" node=159 qml=274 contract=246
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}

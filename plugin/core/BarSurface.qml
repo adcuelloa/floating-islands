@@ -154,12 +154,14 @@ PanelWindow {
     theme: surface.theme
     strings: surface.bar.strings
     tier: surface.tier
-    timeFormat: surface.bar.settings.timeFormat
+    timeFormat: surface.bar.clockFormat
     bar: surface.bar.nativeBar
     localeTag: surface.bar.localeTag
     reach: surface.reach
     x: Math.round((surface.width - width) / 2)
     y: surface.islandY
+    onCycleFormatRequested: surface.bar.cycleClockFormat()
+    onTimezoneRequested: surface.bar.openTimezoneSelector()
   }
 
   // Anchored to the right edge: the media island grows toward the clock and
@@ -238,6 +240,10 @@ PanelWindow {
   }
   function closeCalendar() {
     clock.close()
+  }
+
+  function refreshClock() {
+    clock.refresh()
   }
 
   function toggleMedia() {

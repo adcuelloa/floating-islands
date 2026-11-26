@@ -9,6 +9,7 @@
     "types": ["node"]
   },
   "include": [
-    "tests/unit/layout.test.mjs"
+    "tests/unit/layout.test.mjs",
+    "tests/unit/clock-format.test.mjs"
   ]
 }

@@ -4,6 +4,7 @@ import Quickshell
 import qs.Commons as Commons
 import "core/Identity.js" as Identity
 import "geometry/Layout.mjs" as Layout
+import "logic/ClockFormat.mjs" as ClockFormat
 import "logic/Settings.js" as Settings
 import "logic/Trial.js" as Trial
 import "logic/Calendar.js" as Calendar
@@ -37,6 +38,10 @@ Item {
 
   readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : Identity.fallbackPluginId
   readonly property var settings: Settings.read(barConfig, Identity.settingsKey)
+  readonly property var clockConfig: ClockFormat.resolveClockConfig(barConfig, Identity.settingsKey)
+  property string _localClockFormat: ""
+  readonly property string clockFormat: _localClockFormat !== "" ? _localClockFormat : clockConfig.format
+  onBarConfigChanged: _localClockFormat = ""
   readonly property var hostedEntries: Settings.hostedEntries(barConfig, settings)
   readonly property var publicLayout: JSON.parse(JSON.stringify(barConfig && barConfig.layout ? barConfig.layout : {}))
   // The `locale` setting, or the Omarchy language.
@@ -163,6 +168,51 @@ Item {
     if (!toggled) Commons.Util.execArgv(["omarchy-shell", "shell", "toggle", "omarchy.menu", payload])
   }
 
+  // Right-click on the clock (or `omarchy.clock cycleFormat` IPC): walk the
+  // native horizontal format ring and persist through Omarchy's supported
+  // inline entry write path (`updateEntryInline`), preserving unrelated config.
+  function cycleClockFormat() {
+    var cfg = root.clockConfig
+    var current = root.clockFormat
+    var ring = ClockFormat.formatRing(current, cfg.formatAlt, cfg.ring)
+    var next = ClockFormat.nextFormat(ring, current)
+    if (next === "" || next === current) return
+
+    // Applied locally first so the label changes on the click itself; the
+    // shell.json reload brings back the persisted value and clears the override.
+    root._localClockFormat = next
+
+    var persisted = false
+    if (cfg.nativeConfigured && root.shell && typeof root.shell.updateEntryInline === "function") {
+      var entry = ClockFormat.buildInlineClockEntry(cfg.nativeSettings, next)
+      persisted = root.shell.updateEntryInline("omarchy.clock", entry) === true
+      if (persisted && cfg.hasLegacyOverride && typeof root.shell.mutateShellConfig === "function") {
+        var key = Identity.settingsKey
+        root.shell.mutateShellConfig(function(config) {
+          if (config.bar && config.bar[key]) delete config.bar[key].timeFormat
+        })
+      }
+    }
+    if (!persisted && root.shell && typeof root.shell.mutateShellConfig === "function") {
+      var settingsKey = Identity.settingsKey
+      root.shell.mutateShellConfig(function(config) {
+        if (!config.bar || typeof config.bar !== "object" || Array.isArray(config.bar)) config.bar = ({})
+        if (!config.bar[settingsKey] || typeof config.bar[settingsKey] !== "object" || Array.isArray(config.bar[settingsKey]))
+          config.bar[settingsKey] = ({})
+        config.bar[settingsKey].timeFormat = next
+      })
+    }
+  }
+
+  // Middle-click on the clock: open Omarchy's native timezone selector.
+  function openTimezoneSelector() {
+    Commons.Util.execArgv(["omarchy-menu-timezone"])
+  }
+
+  function refreshClocks() {
+    for (var i = 0; i < root.surfaces.length; i++) root.surfaces[i].refreshClock()
+  }
+
   // ------------------------------------------------------------ tooltips
   // Hosted widgets ask through their facade; the surface the target is on
   // draws it. Shown after the pointer rests 400 ms, as on the stock bar.
@@ -234,6 +284,41 @@ Item {
 
     function syncHidden(): void {
       hiddenWatch.probe()
+    }
+  }
+
+  // Native clock IPC parity when Floating Islands replaces the stock bar
+  // (e.g. `omarchy-menu-timezone` calls `omarchy-shell -q omarchy.clock refresh`).
+  Commons.ShellIpc {
+    target: "omarchy.clock"
+
+    function refresh(): void {
+      root.refreshClocks()
+    }
+
+    function cycleFormat(): void {
+      root.cycleClockFormat()
+    }
+
+    function open(): void {
+      root.summonBarWidget("omarchy.clock")
+    }
+
+    function close(): void {
+      root.hideBarWidget("omarchy.clock")
+    }
+
+    function show(): void {
+      root.summonBarWidget("omarchy.clock")
+    }
+
+    function hide(): void {
+      root.hideBarWidget("omarchy.clock")
+    }
+
+    function toggle(): void {
+      if (root.isBarWidgetOpen("omarchy.clock")) root.hideBarWidget("omarchy.clock")
+      else root.summonBarWidget("omarchy.clock")
     }
   }
 

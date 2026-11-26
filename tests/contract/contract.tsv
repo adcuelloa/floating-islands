@@ -28,6 +28,9 @@ settings	$OMARCHY/shell/shell.qml	F	pluginRegistry.shellConfigMutator = function
 settings	$OMARCHY/shell/shell.qml	F	if (Util.isPlainObject(scoped.bar)) config.bar = JSON.parse(JSON.stringify(scoped.bar))	a bar plugin may rewrite the bar subtree (trial end)
 settings	$OMARCHY/shell/services/PluginShellApi.qml	F	function mutateShellConfig(mutator) {	scoped mutateShellConfig
 settings	$OMARCHY/shell/shell.qml	F	return hasCurrentBarCapabilities() ? shell.mutatePluginBarConfig(mutator) : false	only bar plugins may (and this is one)
+settings	$OMARCHY/shell/services/PluginShellApi.qml	F	function updateEntryInline(id, settings) {	scoped updateEntryInline for native omarchy.clock format persistence
+settings	$OMARCHY/shell/shell.qml	F	if (hasCurrentBarCapabilities() && shell.barEntryConfigured(requestedId))	bar plugins may update configured bar entries (omarchy.clock)
+settings	$OMARCHY/shell/shell.qml	F	return shell.updateEntryInline(requestedId, settings)	updateEntryInline delegates to shell.updateEntryInline
 settings	$OMARCHY/bin/omarchy-shell-config	F	| .bar = (.bar | object_or_empty)	CLI NORMALIZE keeps unknown bar keys (functional test: tests/scripts)
 
 # --- lifecycle
@@ -162,6 +165,8 @@ commons	$OMARCHY/shell/Commons/Util.qml	F	function execArgv(argv) {	argv exec wi
 commons	$OMARCHY/shell/Commons/Util.qml	F	function execDetached(command) {	PluginBarApi.run for hosted widgets
 commons	$OMARCHY/shell/Commons/Util.qml	F	function wheelSteps(accumulator, delta) {	workspace scrolling
 commons	$OMARCHY/shell/Commons/I18n.qml	F	readonly property string formatLocale:	clock follows the Omarchy language
+commons	$OMARCHY/shell/Commons/I18n.qml	F	function formatNumber(value, decimals) {	ISO week digits localized via I18n.formatNumber
+commons	$OMARCHY/bin/omarchy-menu-timezone	F	omarchy-shell -q omarchy.clock refresh	middle-click timezone selector exists and refreshes omarchy.clock via IPC
 commons	$OMARCHY/shell/Commons/qmldir	E	^Translations 1\.0 Translations\.qml$	string catalogs
 commons	$OMARCHY/shell/Commons/Translations.qml	F	property var directory:	Translations.directory
 commons	$OMARCHY/shell/Commons/qmldir	E	^ShellIpc 1\.0 ShellIpc\.qml$	IPC handlers

@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import qs.Commons as Commons
 import "../../plugin/geometry/Layout.mjs" as Layout
+import "../../plugin/logic/ClockFormat.mjs" as ClockFormat
 import "../../plugin/theme"
 import "../../plugin/widgets"
 
@@ -520,6 +521,184 @@ Item {
 
     function test_islandHeight() {
       compare(clock.implicitHeight, 40)
+    }
+
+    function test_mouseButtonRouting() {
+      var cycleCount = 0
+      var tzCount = 0
+      var onCycle = function() { cycleCount++ }
+      var onTz = function() { tzCount++ }
+      clock.cycleFormatRequested.connect(onCycle)
+      clock.timezoneRequested.connect(onTz)
+
+      // Right-click cycles format without opening calendar or invoking timezone.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.RightButton)
+      compare(cycleCount, 1, "right-click emits cycleFormatRequested")
+      compare(tzCount, 0, "right-click does not emit timezoneRequested")
+      verify(!clock.opened, "right-click does not open calendar")
+
+      // Middle-click requests timezone without opening calendar or cycling format.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.MiddleButton)
+      compare(tzCount, 1, "middle-click emits timezoneRequested")
+      compare(cycleCount, 1, "middle-click does not cycle format")
+      verify(!clock.opened, "middle-click does not open calendar")
+
+      // Middle-click while calendar is open closes calendar and emits timezoneRequested.
+      clock.opened = true
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.MiddleButton)
+      verify(!clock.opened, "middle-click closes an open calendar")
+      compare(tzCount, 2, "middle-click emits timezoneRequested while calendar was open")
+      compare(cycleCount, 1, "middle-click still does not cycle format")
+
+      // Left-click does not trigger right/middle actions.
+      mouseClick(clock, clock.width / 2, clock.height / 2, Qt.LeftButton)
+      compare(cycleCount, 1, "left-click does not cycle format")
+      compare(tzCount, 2, "left-click does not open timezone")
+
+      clock.cycleFormatRequested.disconnect(onCycle)
+      clock.timezoneRequested.disconnect(onTz)
+    }
+
+    function test_nativeFormatsRenderWithoutDuplicateDateOrWeekday() {
+      Commons.Style.reduceMotion = true
+      var sysClock = findChild(clock, "systemClock")
+      if (sysClock) sysClock.date = new Date(2026, 9, 28, 9, 5, 42)
+      var weekdayLabel = findChild(clock, "clockWeekday")
+      var dateLabel = findChild(clock, "clockDate")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var suffix = findChild(clock, "clockTimeSuffix")
+      verify(weekdayLabel !== null && dateLabel !== null && prefix !== null && suffix !== null)
+
+      // Time-only preset keeps Floating Islands weekday + date labels in full tier.
+      clock.timeFormat = "HH:mm"
+      compare(clock.compactTimeText, "09:05")
+      compare(clock.detailTimeText, "09:05:42")
+      verify(weekdayLabel.visible, "time-only format shows accent weekday")
+      verify(dateLabel.visible, "time-only format shows muted date")
+
+      // Native weekday + 24h time: suppresses supplementary labels, still reveals seconds.
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.compactTimeText, "Wednesday 09:05")
+      compare(clock.detailTimeText, "Wednesday 09:05:42")
+      verify(!weekdayLabel.visible, "dddd HH:mm suppresses duplicate weekday")
+      verify(!dateLabel.visible, "dddd HH:mm suppresses supplementary date")
+      verify(clock.detailTimeSlot > clock.compactTimeSlot, "dddd HH:mm still expands for seconds")
+      clock.opened = true
+      compare(clock.timeSlot, clock.detailTimeSlot)
+      clock.opened = false
+
+      // Native weekday + 12h time: shifts AM/PM suffix cleanly, no duplicate weekday.
+      clock.timeFormat = "dddd h:mm AP"
+      compare(clock.compactTimeText, "Wednesday 9:05 AM")
+      compare(clock.detailTimeText, "Wednesday 9:05:42 AM")
+      compare(suffix.text, " AM")
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Explicit-seconds native format: constant width, no duplicate weekday.
+      clock.timeFormat = "dddd HH:mm:ss"
+      compare(clock.compactTimeText, "Wednesday 09:05:42")
+      verify(clock.secondsShown)
+      compare(clock.compactTimeSlot, clock.detailTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Native weekday + date + time: no duplicate weekday/date.
+      clock.timeFormat = "ddd d MMM HH:mm"
+      compare(clock.compactTimeText, "Wed 28 Oct 09:05")
+      compare(clock.detailTimeText, "Wed 28 Oct 09:05:42")
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Native date + ISO week (no time): expands ww, constant width, no seconds ticks.
+      clock.timeFormat = "d MMMM 'W'ww yyyy"
+      compare(clock.compactTimeText, "28 October W44 2026")
+      compare(clock.detailTimeText, "28 October W44 2026")
+      verify(!clock.secondsShown)
+      compare(clock.compactTimeSlot, clock.detailTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // ISO date + time: expands seconds, no duplicate date.
+      clock.timeFormat = "yyyy-MM-dd HH:mm"
+      compare(clock.compactTimeText, "2026-10-28 09:05")
+      compare(clock.detailTimeText, "2026-10-28 09:05:42")
+      verify(clock.detailTimeSlot > clock.compactTimeSlot)
+      verify(!weekdayLabel.visible && !dateLabel.visible)
+
+      // Quoted literal containing 's' and 'd' does not falsely trigger seconds or hide date.
+      clock.timeFormat = "'Sat' HH:mm"
+      compare(clock.compactTimeText, "Sat 09:05")
+      compare(clock.detailTimeText, "Sat 09:05:42")
+      verify(!clock.hasExplicitSeconds, "quoted 's' is not a seconds token")
+      verify(!clock.secondsShown, "idle quoted-s format stays on minute ticks")
+      verify(weekdayLabel.visible && dateLabel.visible, "quoted literal does not suppress supplementary labels")
+    }
+
+    function test_persistenceAndTimezoneActionContract() {
+      // Simulate Omarchy's shell.json store + PluginShellApi.updateEntryInline
+      // and verify persistence, unrelated config preservation, and restart.
+      var store = {
+        version: 1,
+        bar: {
+          id: "floating-islands",
+          islands: { density: "comfortable" },
+          layout: {
+            center: [{ id: "omarchy.clock", format: "dddd HH:mm", formatAlt: "yyyy 'W'ww", weekStartDay: "monday" }],
+            right: [{ id: "omarchy.power" }]
+          }
+        },
+        idle: { lock: 300 }
+      }
+      var inlineCalls = []
+      var mutateCalls = 0
+      var shellStub = {
+        updateEntryInline: function(id, entry) {
+          inlineCalls.push({ id: id, entry: JSON.parse(JSON.stringify(entry)) })
+          var center = store.bar.layout.center
+          for (var i = 0; i < center.length; i++) {
+            if (center[i].id === id) {
+              center[i] = JSON.parse(JSON.stringify(entry))
+              return true
+            }
+          }
+          return false
+        },
+        mutateShellConfig: function(mutator) {
+          mutateCalls++
+          var scoped = { bar: JSON.parse(JSON.stringify(store.bar)) }
+          mutator(scoped)
+          store.bar = scoped.bar
+          return true
+        }
+      }
+
+      // Cycle once: dddd HH:mm -> dddd h:mm AP via updateEntryInline.
+      var cfg = ClockFormat.resolveClockConfig(store.bar, "islands")
+      var next = ClockFormat.nextFormat(cfg.ring, cfg.format)
+      compare(next, "dddd h:mm AP")
+      var ok = shellStub.updateEntryInline("omarchy.clock", ClockFormat.buildInlineClockEntry(cfg.nativeSettings, next))
+      verify(ok)
+      compare(inlineCalls.length, 1)
+      compare(mutateCalls, 0, "native updateEntryInline suffices without mutating bar.islands")
+
+      // Simulated restart: re-read from persisted store.
+      var afterRestart = ClockFormat.resolveClockConfig(store.bar, "islands")
+      compare(afterRestart.format, "dddd h:mm AP", "cycled format restored after simulated restart")
+      compare(afterRestart.formatAlt, "yyyy 'W'ww", "formatAlt preserved")
+      compare(store.bar.layout.center[0].weekStartDay, "monday", "unrelated clock keys preserved")
+      compare(store.bar.islands.density, "comfortable", "unrelated bar.islands keys preserved")
+      compare(store.idle.lock, 300, "unrelated top-level shell.json keys preserved")
+
+      // Middle-click timezone action uses fixed-argv Commons.Util.execArgv.
+      Commons.Util.ran = []
+      Commons.Util.execArgv(["omarchy-menu-timezone"])
+      compare(Commons.Util.ran.length, 1)
+      compare(Commons.Util.ran[0], "omarchy-menu-timezone")
+    }
+
+    function test_refreshUpdatesDisplayDate() {
+      var sysClock = findChild(clock, "systemClock")
+      if (sysClock) sysClock.date = new Date(2020, 0, 1, 0, 0, 0)
+      compare(clock.now.getFullYear(), 2020)
+      clock.refresh()
+      verify(clock.now.getFullYear() >= 2026, "refresh updates displayDate to current wall time")
     }
   }
 }

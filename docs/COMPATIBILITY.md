@@ -239,7 +239,7 @@ routing and the shortcuts below.
 
 | Widget | Under this bar | Shortcut |
 |---|---|---|
-| Calendar (`omarchy.clock`) | Native calendar. `logic/Routes.js` maps the id to it: summon opens it on the focused output, hide closes it on every output, open while any output shows it | SUPER+CTRL+ALT+D works |
+| Calendar (`omarchy.clock`) | Native clock island and calendar. `logic/Routes.js` maps the id to the calendar (summon opens on the focused output, hide closes on every output, open while any output shows it). Hover reveals seconds progressively; right-click cycles Omarchy's 10 native horizontal formats (plus custom `format`/`formatAlt`) and persists via `PluginShellApi.updateEntryInline("omarchy.clock", ...)` (falling back to `mutateShellConfig` when `omarchy.clock` is absent from `bar.layout`); middle-click invokes `omarchy-menu-timezone` via `Commons.Util.execArgv`. `Bar.qml` registers `ShellIpc` for `omarchy.clock` (`refresh`, `cycleFormat`, `open`, `close`, `show`, `hide`, `toggle`; `toggleWeekStart` is not implemented because `CalendarView` follows locale week start; hot-reload IPC replacement requires `omarchy restart shell` per item 9 above) | SUPER+CTRL+ALT+D works |
 | World clock (`omarchy.elsewhen`) | Not shown by default. `extraHosted: ["omarchy.elsewhen"]` hosts the stock widget itself (one icon button) | SUPER+CTRL+ALT+E works once hosted |
 | Weather (`omarchy.weather`) | Not shown by default. `extraHosted: ["omarchy.weather"]` hosts the stock widget (a short label) | SUPER+CTRL+ALT+W (`omarchy-notification-weather`) works once hosted |
 | Indicators (`omarchy.indicators`) | Not shown | None depends on it; the states still change from menus and hotkeys |
