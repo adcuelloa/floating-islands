@@ -27,13 +27,20 @@ Violating any rule below is a bug regardless of the feature benefit. Stop and ra
 
 ## Architecture Map
 
-- `plugin/geometry/Layout.js`, `plugin/logic/*.js`, `plugin/theme/Palette.js`, `plugin/theme/Icons.js`: Pure JS modules (`.pragma library`) tested directly in Node (`tests/unit/`). Keep pure logic out of QML views.
+- `plugin/geometry/Layout.mjs`, `plugin/logic/ClockFormat.mjs`: Native ECMAScript modules (`.mjs`) with JSDoc contracts, executed directly by Qt/QML and Node (`tests/unit/`) and type-checked via `tsconfig.qml.json`.
+- `plugin/logic/*.js`, `plugin/theme/Palette.js`, `plugin/theme/Icons.js`: Legacy `.pragma library` pure JS modules loaded in Node via `tests/unit/qmljs.mjs`. Keep pure logic out of QML views.
 - `plugin/adapters/*.qml`: Only layer allowed to touch Hyprland, Pipewire, Networking, Bluetooth, UPower, or `FileView`/`Process`.
 - `plugin/core/`: `BarSurface.qml`, `WidgetHosting.qml`, `HostedBarApi.qml`, `Facades.js`, `Identity.js`.
 - `plugin/widgets/` & `plugin/components/`: Views taking `theme` and adapters by injection so `tests/qml/` can drive them offscreen with stubs.
 - `tests/contract/contract.tsv`: Symbol-level upstream Omarchy/Quickshell/Hyprland compatibility contract. Update it whenever a new upstream symbol or import is used.
 
 ## Validation Gates
+
+Install the dev-only TypeScript tooling once before running the suite locally (never required to install or run the plugin):
+
+```bash
+pnpm install --frozen-lockfile --ignore-scripts
+```
 
 Run the full isolated suite before opening or updating a PR:
 
@@ -43,18 +50,26 @@ tests/run-all.sh
 
 This runs:
 1. `omarchy-plugin-validate` (manifest & structure)
-2. `tests/imports.sh` (allowlisted QML imports only)
+2. `tests/imports.sh` (allowlisted QML imports and single-line static relative `.mjs` imports)
 3. `tests/lint.sh` (`qmllint` with documented allowlist in `tests/lint-allowlist.txt`)
 4. `tests/contract/check-contract.sh` and `tests/contract/self-test.sh`
 5. `node --test tests/unit/*.test.mjs` (pure JS unit tests)
-6. `tests/qml/run.sh` (offscreen `qmltestrunner`, fails on unexpected stderr/warnings)
-7. `tests/scripts/isolated.sh tests/scripts/sandbox.test.sh` (bubblewrap-isolated install/activate/rollback/branch-test checks)
-8. `tests/privacy.sh` (blocks personal usernames, paths, hostnames, emails, or key-shaped strings)
+6. `tests/typecheck.sh` (strict TypeScript `checkJs` via `tsc --noEmit` + isolated negative checks)
+7. `tests/qml/run.sh` (offscreen `qmltestrunner`, fails on unexpected stderr/warnings)
+8. `tests/scripts/isolated.sh tests/scripts/sandbox.test.sh` (bubblewrap-isolated install/activate/rollback/branch-test checks)
+9. `tests/privacy.sh` (blocks personal usernames, paths, hostnames, emails, or key-shaped strings)
 
 Report clearly in PR descriptions which behavior was verified by automated/offscreen tests versus live Wayland/hardware trials.
 
 ## Conventions
 
 - **Language:** Write all code, comments, commit messages, docs, issues, and PRs in English.
+- **Language & typing policy:**
+  - Typed QML for presentation and native bindings (`plugin/widgets/`, `plugin/components/`, `plugin/core/`, `plugin/adapters/`).
+  - Native `.mjs` with JSDoc and strict TypeScript `checkJs` (`tsconfig.qml.json`) for Qt-executed pure logic (`plugin/**/*.mjs`).
+  - TypeScript (or strictly checked `.mjs`) for new Node tooling and tests where practical (`tsconfig.node.json`).
+  - Legacy QML JavaScript (`.js` / `.pragma library`) retained only where Qt/Quickshell compatibility requires it.
+  - Self-contained Bash for installation and recovery (`scripts/`), with zero Node.js/pnpm/TypeScript runtime dependency.
+  - Migrate incrementally as modules are touched rather than performing repository-wide conversions.
 - **Commits & PRs:** Use Conventional Commits (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `test(scope): ...`, `ci: ...`). Keep PRs focused on one logical change.
 - **Documentation:** Update relevant docs (`docs/COMPATIBILITY.md`, `docs/DECISIONS.md`, `docs/TESTING.md`, `README.md`) when behavior, settings, or upstream contracts change.

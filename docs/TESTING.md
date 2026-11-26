@@ -4,6 +4,12 @@ Floating Islands separates **isolated automated verification** (safe to run on a
 
 ## Full Isolated Suite
 
+Install the dev-only TypeScript tooling once before running the suite locally (never required to install or run the plugin):
+
+```bash
+pnpm install --frozen-lockfile --ignore-scripts
+```
+
 ```bash
 tests/run-all.sh
 ```
@@ -28,13 +34,13 @@ Stages executed in order:
 If you are editing pure JavaScript logic or documentation on a non-Arch machine:
 
 ```bash
-npm ci --ignore-scripts # one-time dev-only setup for tsc (never required to install or run the plugin)
+pnpm install --frozen-lockfile --ignore-scripts # one-time dev-only setup for tsc (never required to install or run the plugin)
 node --test tests/unit/*.test.mjs
 tests/typecheck.sh
 tests/privacy.sh
 ```
 
-Type checking uses development-only pinned `devDependencies` (`package.json` / `package-lock.json`) at the repository root and produces no build artifacts (`noEmit: true`). Installing or running the plugin under `omarchy-shell` never requires Node.js, npm, or TypeScript.
+Type checking uses development-only pinned `devDependencies` (`package.json` / `pnpm-lock.yaml`, `packageManager: "pnpm@12.16.1"`) at the repository root and produces no build artifacts (`noEmit: true`). `tsconfig.qml.json` automatically includes all `plugin/**/*.mjs` modules, while `tsconfig.node.json` currently covers `tests/unit/layout.test.mjs` (other Node unit tests execute the migrated `.mjs` modules directly and will adopt strict type checking incrementally). Installing or running the plugin under `omarchy-shell` never requires Node.js, pnpm, or TypeScript.
 
 ## Supervised Live Desktop Testing
 

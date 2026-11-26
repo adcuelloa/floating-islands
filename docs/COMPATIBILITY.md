@@ -98,29 +98,36 @@ Its only findings are seven environment false positives, documented in
 
 ### Validated pilot results
 
-`plugin/geometry/Layout.mjs` and `plugin/logic/ClockFormat.mjs` were migrated from legacy `.pragma library` `.js` files to native ECMAScript modules (`.mjs`) with JSDoc type contracts and verified on the supported baseline (Omarchy `4.5.0-3`, Quickshell `0.3.2.r7.g2b4501a-1`, Qt `6.12.0`, CI Node.js `v26.13.0`):
+`plugin/geometry/Layout.mjs` and `plugin/logic/ClockFormat.mjs` were migrated from legacy `.pragma library` `.js` files to native ECMAScript modules (`.mjs`) with JSDoc type contracts on the supported baseline (Omarchy `4.5.0-3`, Quickshell `0.3.2.r7.g2b4501a-1`, Qt `6.12.0`, CI Node.js `v26.13.0`, CI `pnpm 12.16.1-1`).
 
-- **Qt/QML & Quickshell runtime:** QML `import "...mjs" as Alias`, explicit `export const`/`export function`, inter-module relative `import ... from "./...mjs"`, and single-evaluation shared-state module semantics (matching `.pragma library`) all work natively in `qmltestrunner` and `quickshell`.
-- **Static & packaging tools:** `qmllint`, `tests/imports.sh` (which also validates relative `.mjs` imports and blocks bare/Node specifiers inside `plugin/`), `omarchy-plugin-validate`, `scripts/install.sh`, and the bubblewrap sandbox suite accept `.mjs` files with zero runtime build step or extra end-user dependencies.
+**Continuously enforced by repository tests and CI:**
+- **Offscreen QML & static validation:** `tests/qml/run.sh` (270 offscreen tests, including all Adaptive Clock tests), `qmllint` (`tests/lint.sh`), `tests/imports.sh`, `omarchy-plugin-validate`, and the bubblewrap sandbox installer suite verify `Layout.mjs` and `ClockFormat.mjs` with zero runtime build step or extra end-user dependencies.
 - **Direct Node testing:** Node unit tests import the distributed `plugin/**/*.mjs` files directly without transforming them through `tests/unit/qmljs.mjs`.
+- **Strict TypeScript `checkJs` (`tests/typecheck.sh`):** Validates all `plugin/**/*.mjs` modules (`tsconfig.qml.json`) and `tests/unit/layout.test.mjs` (`tsconfig.node.json`), plus isolated negative checks in `/tmp` (including automatic inclusion of newly added `plugin/**/*.mjs` files).
+
+**Verified via out-of-tree isolated runtime probes (not continuously enforced in CI):**
+- Isolated offscreen `qmltestrunner` and `quickshell` probes on Qt `6.12.0` / Quickshell `0.3.2.r7.g2b4501a-1` confirmed inter-module relative `import { ... } from "./helper.mjs"`, single-evaluation shared-state module semantics across multiple QML component instances (matching `.pragma library`), direct Quickshell loading of `Layout.mjs` and `ClockFormat.mjs`, and `QJSEngine` standard library feature support.
 
 ### Established development conventions
 
+- **Language & typing policy:** Typed QML for presentation/bindings; native `.mjs` with JSDoc + strict `checkJs` for Qt-executed pure logic; TypeScript (or strictly checked `.mjs`) for new Node tooling and tests where practical; legacy `.js` (`.pragma library`) retained only where Qt/Quickshell compatibility requires it; self-contained Bash for `scripts/`.
 - **Shared strict baseline (`tsconfig.base.json`):** `strict`, `noEmit`, `allowJs`, `checkJs`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noImplicitReturns`, `verbatimModuleSyntax`, `isolatedModules`, and `forceConsistentCasingInFileNames`.
-- **Qt-executed `.mjs` modules (`tsconfig.qml.json`):** `target: "ES2016"`, `lib: ["ES2016"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `types: []` — prevents Node.js or browser DOM globals and post-ES2016 standard library APIs from leaking into Qt-executed plugin code while requiring explicit `.mjs` extensions.
-- **Node-executed tests/tooling (`tsconfig.node.json`):** `target: "ES2024"`, `lib: ["ES2024"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `erasableSyntaxOnly: true`, `types: ["node"]`.
-- **Verification gate (`tests/typecheck.sh`):** Runs positive checks on both configs plus isolated negative checks in `/tmp` confirming invalid contracts, Node/DOM globals, and post-ES2016 stdlib methods are rejected. Executed in `tests/run-all.sh` and CI `qa` using pinned dev-only tooling (`npm ci --ignore-scripts`).
+- **Qt-executed `.mjs` modules (`tsconfig.qml.json`):** `"include": ["plugin/**/*.mjs"]`, `target: "ES2016"`, `lib: ["ES2016"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `types: []` — automatically covers newly added `.mjs` modules while blocking Node.js/DOM globals and post-ES2016 stdlib methods.
+- **Node-executed tests/tooling (`tsconfig.node.json`):** `target: "ES2024"`, `lib: ["ES2024"]`, `module: "NodeNext"`, `moduleResolution: "NodeNext"`, `erasableSyntaxOnly: true`, `types: ["node"]`. Currently covers `tests/unit/layout.test.mjs`; other Node unit tests execute the migrated `.mjs` modules directly and will be added incrementally.
+- **Development package manager:** Pinned `pnpm@12.16.1` (`packageManager` in `package.json`, `pnpm-lock.yaml`, provisioned in CI from the pinned Arch Linux Archive via `pacman` and installed unprivileged with `pnpm install --frozen-lockfile --ignore-scripts`).
 
 ### Future migration recommendations
 
-- Migrate remaining pure logic modules under `plugin/logic/`, `plugin/geometry/`, and `plugin/theme/` to `.mjs` with JSDoc contracts incrementally as they are modified, adding each migrated module to `tsconfig.qml.json` and switching its unit tests to direct ESM imports.
+- Migrate remaining pure logic modules under `plugin/logic/`, `plugin/geometry/`, and `plugin/theme/` to `.mjs` with JSDoc contracts incrementally as they are modified (`tsconfig.qml.json` includes `plugin/**/*.mjs` automatically) and switch their unit tests to direct ESM imports.
 - Keep `tests/unit/qmljs.mjs` only until all legacy `.js` modules are migrated, and retain legacy `.js` only where a module genuinely requires QML-specific `.import` / `.pragma` semantics.
-- Keep `scripts/*.sh` as self-contained Bash with no Node.js or TypeScript dependency.
+- Keep `scripts/*.sh` as self-contained Bash with no Node.js, pnpm, or TypeScript dependency.
 
 ### Remaining compatibility limitations
 
-- **Qt 6.12 `QJSEngine` standard library ceiling:** Empirical probes on Quickshell `0.3.2` / Qt `6.12.0` confirm ES2016 baseline support (`Array.prototype.includes`, `Number.isFinite`), `Object.entries`, and cherry-picked syntax (`?.`, `??`), while ES2019–ES2022 library additions (`Array.prototype.at`, `Object.fromEntries`, `Object.hasOwn`, `String.prototype.replaceAll`, `structuredClone`) are absent. `tsconfig.qml.json` caps `lib` at `ES2016` accordingly, but `tsc --noEmit` is not a substitute for running offscreen QML/Quickshell tests.
-- **QML files themselves** remain checked by `qmllint` rather than TypeScript; `checkJs` covers `.mjs` logic and Node consumers only.
+- **Qt 6.12 `QJSEngine` standard library ceiling:** Out-of-tree probes on Quickshell `0.3.2` / Qt `6.12.0` confirm ES2016 baseline support (`Array.prototype.includes`, `Number.isFinite`), `Object.entries`, and cherry-picked syntax (`?.`, `??`), while ES2019–ES2022 library additions (`Array.prototype.at`, `Object.fromEntries`, `Object.hasOwn`, `String.prototype.replaceAll`, `structuredClone`) are absent. `tsconfig.qml.json` caps `lib` at `ES2016` accordingly, but `tsc --noEmit` is not a substitute for running offscreen QML/Quickshell tests.
+- **Lightweight shell import checker (`tests/imports.sh`):** Validates single-line static `import`/`export ... from` relative specifiers in `plugin/**/*.mjs` and blocks bare/Node specifiers, and is complemented by `tsc --noEmit`. It does not parse dynamic `import()` or multiline import syntax; prefer straightforward single-line static relative imports in Qt-executed `.mjs` modules.
+- **Node test coverage scope:** `tsconfig.node.json` currently covers `tests/unit/layout.test.mjs` only; other Node tests execute the migrated `.mjs` modules directly without yet being checked by `tsc`.
+- **QML files themselves** remain checked by `qmllint` rather than TypeScript; `checkJs` covers `.mjs` logic and included Node consumers only.
 
 ## Upstream capability inventory
 

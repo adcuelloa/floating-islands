@@ -19,7 +19,7 @@ reviews:
         - Enforce Omarchy plugin boundaries: never suggest modifying /usr/share/omarchy or adding a separate daemon.
         - Flag QML binding loops, object lifetime / teardown leaks, or late callbacks after component destruction.
         - Flag any focus grab or keyboard focus on the bar PanelWindow; interactive popouts must use KeyboardPanel.
-        - Verify pointer/hover hit areas stay aligned with Layout.js and never block clicks in transparent gaps.
+        - Verify pointer/hover hit areas stay aligned with Layout.mjs and never block clicks in transparent gaps.
         - Verify colors come from Theme.qml tokens (no hard-coded colors) and animations respect Style.duration (reduced motion).
         - Check keyboard navigation (Tab/arrows/Escape), focus-ring visibility on lit/unlit states, and Accessible roles/names/descriptions.
     - path: "plugin/adapters/**"
@@ -27,9 +27,14 @@ reviews:
         - Verify event-driven state updates; flag unnecessary polling timers where signals or FileView watchers exist.
         - Verify Quickshell.Io.Process uses fixed argument arrays with no shell interpolation and bounded timeouts.
         - Verify hardware/service state is observed rather than assumed from command exit status alone.
+    - path: "plugin/**/*.mjs"
+      instructions: |
+        - Keep native ECMAScript modules free of QML/compositor, Node.js, and browser DOM globals so both Qt 6.12 and Node.js execute them directly.
+        - Stay within Qt 6.12's ES2016 standard library baseline (enforced by tsconfig.qml.json) and use straightforward single-line static relative imports.
+        - Maintain strict JSDoc contracts checked by tests/typecheck.sh (no broad any, @ts-ignore, or @ts-nocheck).
     - path: "plugin/**/*.js"
       instructions: |
-        - Keep pure JS modules (.pragma library) free of QML/compositor dependencies so Node unit tests can load them directly.
+        - Keep legacy pure JS modules (.pragma library) free of QML/compositor dependencies so Node unit tests can load them via tests/unit/qmljs.mjs.
         - Flag edge cases in geometry, responsive tier hysteresis, widget hosting reconciliation, and shortcut routing.
     - path: "plugin/i18n/*.json"
       instructions: |

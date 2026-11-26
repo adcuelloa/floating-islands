@@ -66,7 +66,9 @@ while IFS= read -r file; do
 done < <(find "$plugin" -type f \( -name '*.qml' -o -name '*.js' \) | sort)
 
 # Native ECMAScript modules (.mjs) in the plugin may only import relative local
-# modules (no Node.js built-ins or bare npm package specifiers).
+# modules (no Node.js built-ins or bare package specifiers). This shell check
+# validates single-line static import/export-from forms and is complemented by
+# strict TypeScript checking (tests/typecheck.sh).
 while IFS= read -r file; do
   dir=$(dirname "$file")
   while IFS= read -r line; do

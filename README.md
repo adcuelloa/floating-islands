@@ -61,7 +61,7 @@ scripts/install.sh
 scripts/activate.sh --check
 ```
 
-*(Optional for contributors or extra pre-install verification: `tests/run-all.sh` runs the full isolated test suite without touching anything outside `/tmp`.)*
+*(Optional for contributors or extra pre-install verification: after one-time dev-only `pnpm install --frozen-lockfile --ignore-scripts`, `tests/run-all.sh` runs the full isolated test suite without touching anything outside `/tmp`. End-user installation and runtime never require Node.js, pnpm, or TypeScript.)*
 
 ### 3. Try temporarily with an automatic watchdog (recommended first step)
 
@@ -166,15 +166,15 @@ plugin/            Installable Omarchy plugin folder (id: floating-islands)
   manifest.json    Plugin metadata, kind "bar", entry point
   Bar.qml          Entry point, host contract, settings, trial mode, IPC
   core/            Per-output BarSurface, WidgetHosting, HostedBarApi, Identity
-  geometry/        Layout.js — responsive tiers, exclusive zone, hit areas (pure JS)
+  geometry/        Layout.mjs — responsive tiers, exclusive zone, hit areas (native .mjs)
   theme/           Theme.qml (bound to Commons.Color/Style), Palette.js, Icons.js
-  logic/           Pure JS modules: workspaces, titles, settings, clock, calendar, media, routes, control center
+  logic/           Pure logic modules: ClockFormat.mjs (native .mjs) and legacy .pragma library .js modules (workspaces, titles, settings, calendar, media, routes, control center)
   adapters/        Compositor and system-service adapters (Hyprland, Pipewire, Connectivity, UPower, Brightness)
   components/      Island, IslandButton, StrokeIcon, Divider, TooltipBubble
   widgets/         Launcher/workspaces, title, clock, calendar, media, hosted status island, Control Center
   i18n/            en, es, ja translation catalogs
-scripts/           install, activate, branch-test, rollback, uninstall
-tests/             contract, lint, imports, unit (Node), QML (offscreen), bubblewrap sandbox, privacy
+scripts/           install, activate, branch-test, rollback, uninstall (self-contained Bash)
+tests/             contract, lint, imports, unit (Node), typecheck (tsc --noEmit), QML (offscreen), bubblewrap sandbox, privacy
 docs/              architecture, compatibility, decisions, testing, recovery, roadmap, design references, RFC, assets
 ```
 

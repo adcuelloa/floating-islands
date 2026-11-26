@@ -32,7 +32,8 @@ pinned=(
 expect_versions="omarchy 4.5.0-3
 quickshell 0.3.2.r7.g2b4501a-1
 qt6-base 6.12.0-3
-qt6-declarative 6.12.0-2"
+qt6-declarative 6.12.0-2
+pnpm 12.16.1-1"
 
 fetch() {
   local url=$1 sum=$2 file="$work/${1##*/}"
@@ -50,7 +51,7 @@ else
   pacman_sync_flag="-Syu"
 fi
 ci_pacman_retry "$deadline" 240 -- "$pacman_sync_flag" --noconfirm --needed \
-  jq nodejs npm bubblewrap qt6-base qt6-declarative qt6-svg qt6-wayland \
+  jq nodejs pnpm bubblewrap qt6-base qt6-declarative qt6-svg qt6-wayland \
   noto-fonts ttf-liberation fontconfig
 
 files=()
@@ -84,7 +85,7 @@ bsdtar -xf "${files[3]}" -C / \
   usr/share/fonts/omarchy
 fc-cache -f
 
-actual=$(pacman -Q omarchy quickshell qt6-base qt6-declarative)
+actual=$(pacman -Q omarchy quickshell qt6-base qt6-declarative pnpm)
 if [[ $actual != "$expect_versions" ]]; then
   echo "bootstrap: installed versions differ from the pins:" >&2
   diff <(echo "$expect_versions") <(echo "$actual") >&2

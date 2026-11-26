@@ -9,7 +9,7 @@ repo=$(cd "$here/.." && pwd)
 TSC=${TSC:-"$repo/node_modules/.bin/tsc"}
 
 if [[ ! -x $TSC ]]; then
-  echo "typecheck: $TSC not found (run 'npm ci --ignore-scripts' for development type checking)" >&2
+  echo "typecheck: $TSC not found (run 'pnpm install --frozen-lockfile --ignore-scripts' for development type checking)" >&2
   exit 1
 fi
 
@@ -89,6 +89,28 @@ expect_error "no-es2022-stdlib-in-qml" "tsconfig.qml.json" "TS2550" \
 expect_error "invalid-node-consumer-arg" "tsconfig.node.json" "TS2345" \
   "import * as Layout from '$repo/plugin/geometry/Layout.mjs';
 export const bad = Layout.chooseTier('1920', {}, Layout.metrics(1, 'compact'), 'full');"
+
+# Isolated automatic-inclusion probe: adding a new .mjs file under plugin/ must
+# enter tsconfig.qml.json's "plugin/**/*.mjs" scope automatically without
+# editing tsconfig.qml.json.
+auto_dir="$tmp/auto-include"
+mkdir -p "$auto_dir/plugin/logic"
+cp "$repo/tsconfig.base.json" "$repo/tsconfig.qml.json" "$auto_dir/"
+cp -R "$repo/plugin/geometry" "$auto_dir/plugin/geometry"
+cat >"$auto_dir/plugin/logic/NewModule.mjs" <<'EOF'
+import { partsFor } from "./MissingOrUnused.mjs";
+/** @param {number} n */
+export function bad(n) { return n; }
+export const fail = bad("not-a-number");
+EOF
+auto_out=$("$TSC" -p "$auto_dir/tsconfig.qml.json" 2>&1)
+auto_rc=$?
+if (( auto_rc == 0 )) || ! grep -q "TS2345" <<<"$auto_out"; then
+  fail "negative[auto-include-new-mjs]: expected TS2345 for newly added plugin/**/*.mjs"
+  printf '%s\n' "$auto_out" | sed 's/^/  /' >&2
+else
+  pass "negative[auto-include-new-mjs] rejected automatically (TS2345)"
+fi
 
 if (( failures )); then
   echo "typecheck: $failures check(s) failed" >&2

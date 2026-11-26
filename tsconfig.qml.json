@@ -8,7 +8,6 @@
     "types": []
   },
   "include": [
-    "plugin/geometry/Layout.mjs",
-    "plugin/logic/ClockFormat.mjs"
+    "plugin/**/*.mjs"
   ]
 }
