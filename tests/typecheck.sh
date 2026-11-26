@@ -98,18 +98,17 @@ mkdir -p "$auto_dir/plugin/logic"
 cp "$repo/tsconfig.base.json" "$repo/tsconfig.qml.json" "$auto_dir/"
 cp -R "$repo/plugin/geometry" "$auto_dir/plugin/geometry"
 cat >"$auto_dir/plugin/logic/NewModule.mjs" <<'EOF'
-import { partsFor } from "./MissingOrUnused.mjs";
 /** @param {number} n */
 export function bad(n) { return n; }
 export const fail = bad("not-a-number");
 EOF
 auto_out=$("$TSC" -p "$auto_dir/tsconfig.qml.json" 2>&1)
 auto_rc=$?
-if (( auto_rc == 0 )) || ! grep -q "TS2345" <<<"$auto_out"; then
-  fail "negative[auto-include-new-mjs]: expected TS2345 for newly added plugin/**/*.mjs"
+if (( auto_rc == 0 )) || ! grep -qE 'plugin/logic/NewModule\.mjs.*error TS2345:' <<<"$auto_out"; then
+  fail "negative[auto-include-new-mjs]: expected TS2345 from plugin/logic/NewModule.mjs"
   printf '%s\n' "$auto_out" | sed 's/^/  /' >&2
 else
-  pass "negative[auto-include-new-mjs] rejected automatically (TS2345)"
+  pass "negative[auto-include-new-mjs] rejected automatically (TS2345 in NewModule.mjs)"
 fi
 
 if (( failures )); then
