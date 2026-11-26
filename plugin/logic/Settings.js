@@ -46,7 +46,7 @@ function read(barConfig, key) {
   var out = {}
   out.density = DENSITIES.indexOf(raw.density) !== -1 ? raw.density : DEFAULTS.density
   out.tier = TIERS.indexOf(raw.tier) !== -1 ? raw.tier : DEFAULTS.tier
-  out.timeFormat = typeof raw.timeFormat === "string" && raw.timeFormat.length > 0 && raw.timeFormat.length <= 32
+  out.timeFormat = typeof raw.timeFormat === "string" && raw.timeFormat.trim().length > 0 && !/[\u0000-\u001f\u007f]/.test(raw.timeFormat)
     ? raw.timeFormat : DEFAULTS.timeFormat
   out.showTitle = raw.showTitle !== false
   out.hostWidgets = raw.hostWidgets !== false

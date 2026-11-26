@@ -236,6 +236,26 @@ export function sideBudget(screenWidth, centerWidth, m) {
 }
 
 /**
+ * Maximum width the centred clock may occupy without overlapping either fixed
+ * side group (respecting sideMargin and centerClearance). Returns 0 when the
+ * fixed side groups alone already leave no room for a centred slot.
+ *
+ * @param {number} screenWidth
+ * @param {number} leftFixed
+ * @param {number} rightFixed
+ * @param {Metrics} m
+ * @returns {number}
+ */
+export function maxCenterWidth(screenWidth, leftFixed, rightFixed, m) {
+  if (!isFinite(screenWidth) || screenWidth <= 0) return 0;
+  const left = isFinite(leftFixed) && leftFixed > 0 ? leftFixed : 0;
+  const right = isFinite(rightFixed) && rightFixed > 0 ? rightFixed : 0;
+  const widestSide = Math.max(left, right);
+  const available = Math.floor(screenWidth - 2 * (m.sideMargin + widestSide + m.centerClearance));
+  return Math.max(0, available);
+}
+
+/**
  * @param {number} screenWidth
  * @param {TierDemand} demand
  * @param {Metrics} m

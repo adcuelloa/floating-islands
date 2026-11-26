@@ -121,3 +121,17 @@ test("dynamic clock width keeps tier stable via max demand while title reclaims 
   assert.ok(leftEdge + idleTitle + m.centerClearance <= idleClockLeft, "idle clearance preserved");
   assert.ok(leftEdge + expandedTitle + m.centerClearance <= expandedClockLeft, "expanded clearance preserved");
 });
+
+test("maxCenterWidth bounds centered clock and distinguishes clock overlap from fixed side-group overflow", () => {
+  const m = Layout.metrics(1, "compact");
+  // At 1024 px with left=240, right=260, sideMargin=12, centerClearance=16:
+  // available = 1024 - 2 * (12 + 260 + 16) = 448 px.
+  assert.equal(Layout.maxCenterWidth(1024, 240, 260, m), 448);
+  // Symmetric centered clock of width 448 clears both sides by >= centerClearance.
+  const budget = Layout.sideBudget(1024, 448, m);
+  assert.ok(budget >= 260, `sideBudget ${budget} >= 260`);
+
+  // When fixed side groups alone exceed the screen width, maxCenterWidth is 0.
+  assert.equal(Layout.maxCenterWidth(560, 280, 280, m), 0);
+  assert.equal(Layout.maxCenterWidth(0, 200, 200, m), 0);
+});

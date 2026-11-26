@@ -16,6 +16,7 @@ KeyboardPanel {
   property var island: null
   property date now: new Date()
   property string localeTag: "en-GB"
+  property var weekStartDay: null
 
   readonly property real s: theme ? theme.m.scale : 1
 
@@ -42,6 +43,7 @@ KeyboardPanel {
       strings: panel.strings
       now: panel.now
       localeTag: panel.localeTag
+      weekStartDay: panel.weekStartDay
       width: parent ? parent.width : implicitWidth
       onCloseRequested: panel.close()
       Component.onCompleted: reset()

@@ -114,6 +114,8 @@ Item {
 
     function init() {
       en.localeTag = "en-GB"
+      en.weekStartDay = null
+      other.weekStartDay = null
       en.reset()
       other.reset()
       en.forceActiveFocus()
@@ -195,6 +197,32 @@ Item {
       en.reset()
       compare(en.selected.month, 9)
       verify(!en.cursorShown)
+    }
+
+    function test_configuredWeekStartOverridesLocaleAndPropagates() {
+      // Locale fallback when weekStartDay is unset or invalid.
+      compare(en.weekStart, 1, "en-GB defaults to Monday")
+      compare(other.weekStart, 0, "ja-JP defaults to Sunday")
+      en.weekStartDay = "invalid-day"
+      compare(en.weekStart, 1, "invalid weekStartDay falls back to locale")
+
+      // Explicit weekStartDay overrides locale and updates grid alignment.
+      en.weekStartDay = "sunday"
+      other.weekStartDay = "sunday"
+      compare(en.weekStart, 0)
+      compare(en.cells[4].day, 1, "October 1 2026 moves to fifth cell under Sunday start")
+      compare(other.weekStart, 0)
+
+      en.weekStartDay = "monday"
+      other.weekStartDay = "monday"
+      compare(en.weekStart, 1)
+      compare(en.cells[3].day, 1, "October 1 2026 moves back to fourth cell under Monday start")
+      compare(other.weekStart, 1, "explicit Monday propagates to ja-JP calendar instance too")
+      compare(other.cells[3].day, 1)
+
+      // Arbitrary valid weekday (e.g. Saturday = 6) renders as configured.
+      en.weekStartDay = "saturday"
+      compare(en.weekStart, 6)
     }
   }
 }

@@ -112,7 +112,12 @@ PanelWindow {
   onDemandsChanged: Qt.callLater(surface.updateTier)
   onScreenWidthChanged: Qt.callLater(surface.updateTier)
 
-  readonly property real activeClockWidth: Math.max(clock.demandFor(tier), Math.ceil(clock.implicitWidth))
+  readonly property real clockAvailableWidth: Layout.maxCenterWidth(screenWidth, leftWidth, rightFor(tier), m)
+  readonly property real activeClockWidth: {
+    var natural = clock.demandFor(tier)
+    var capped = clockAvailableWidth > 0 ? Math.min(natural, clockAvailableWidth) : natural
+    return Math.max(capped, Math.ceil(clock.implicitWidth))
+  }
   readonly property real titleMaxWidth: titleWanted
     ? Layout.titleWidth(tier, screenWidth, { center: activeClockWidth, leftFixed: demands[tier].leftFixed }, m)
     : 0
@@ -155,6 +160,8 @@ PanelWindow {
     strings: surface.bar.strings
     tier: surface.tier
     timeFormat: surface.bar.clockFormat
+    weekStartDay: surface.bar.clockWeekStartDay
+    maximumWidth: surface.clockAvailableWidth
     bar: surface.bar.nativeBar
     localeTag: surface.bar.localeTag
     reach: surface.reach
@@ -319,6 +326,8 @@ PanelWindow {
       exclusiveZone: surface.exclusiveZone,
       hidden: surface.bar.barHidden,
       titleMaxWidth: surface.titleMaxWidth,
+      clockAvailableWidth: surface.clockAvailableWidth,
+      clockConstrained: clock.constrained,
       islands: {
         launcher: { x: leftGroup.x + launcher.x, y: launcher.y + surface.islandY, width: launcher.width, height: launcher.height },
         title: title.visible ? { x: leftGroup.x + title.x, y: surface.islandY, width: title.width, height: title.height } : null,

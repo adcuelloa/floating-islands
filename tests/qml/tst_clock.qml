@@ -69,6 +69,7 @@ Item {
       Commons.Style.spacing.scale = 1
       clock.tier = "full"
       clock.timeFormat = "HH:mm"
+      clock.maximumWidth = 0
       clock.localeTag = "en-GB"
       clock.opened = false
       clock.detailed = false
@@ -87,6 +88,7 @@ Item {
       clock.opened = false
       clock.detailed = false
       clock.timeFormat = "HH:mm"
+      clock.maximumWidth = 0
       clock.localeTag = "en-GB"
       clock.tier = "full"
       var sysClock = findChild(clock, "systemClock")
@@ -699,6 +701,123 @@ Item {
       compare(clock.now.getFullYear(), 2020)
       clock.refresh()
       verify(clock.now.getFullYear() >= 2026, "refresh updates displayDate to current wall time")
+    }
+
+    // F3: Format changes update text and container geometry coherently in one
+    // step without animating from an incompatible previous text width, whether
+    // idle, hovered, calendar-open, or mid-seconds transition.
+    function test_formatChangeUpdatesGeometryCoherentlyWithoutOverflow() {
+      verify(theme.widget > 0, "animations enabled")
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      var timeContainer = findChild(clock, "clockTime")
+      verify(prefix !== null && secondsClip !== null && timeContainer !== null)
+
+      // 1. Idle: short -> long -> short snaps timeSlot synchronously.
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot)
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "idle short->long snaps immediately")
+      verify(prefix.implicitWidth <= timeContainer.width + 0.5, "no transient overflow on idle short->long")
+      compare(secondsClip.width, 0, "no spurious seconds reveal on idle short->long")
+
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "idle long->short snaps immediately")
+      verify(Math.abs(timeContainer.width - clock.compactTimeSlot) <= 0.5, "no trailing empty space on idle long->short")
+      compare(secondsClip.width, 0, "no spurious seconds flash on idle long->short")
+
+      // 2. Hovered (detailed) and calendar-open: short -> long -> date-only -> short.
+      clock.detailed = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      clock.timeFormat = "dddd h:mm AP"
+      compare(clock.timeSlot, clock.detailTimeSlot, "hovered short->long settles coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on hovered short->long")
+
+      clock.timeFormat = "d MMMM 'W'ww yyyy"
+      compare(clock.timeSlot, clock.compactTimeSlot, "hovered time->date-only snaps coherently")
+      compare(secondsClip.width, 0)
+
+      clock.detailed = false
+      clock.opened = true
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.detailTimeSlot, "calendar-open date-only->short snaps coherently")
+      clock.timeFormat = "ddd d MMM h:mm AP"
+      compare(clock.timeSlot, clock.detailTimeSlot, "calendar-open short->long snaps coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped on calendar-open short->long")
+      clock.opened = false
+      tryCompare(clock, "timeSlot", clock.compactTimeSlot, 1000)
+
+      // 3. During an active seconds reveal transition: format change snaps coherently.
+      clock.timeFormat = "HH:mm"
+      clock.opened = true
+      tryVerify(function() {
+        return clock.secondsProgress > 0.05 && clock.secondsProgress < 0.95
+      }, 500, "reached mid-seconds-reveal")
+      clock.timeFormat = "dddd HH:mm"
+      compare(clock.timeSlot, clock.detailTimeSlot, "mid-transition short->long snaps coherently")
+      verify(prefix.implicitWidth <= prefix.width + 0.5, "prefix unclipped after mid-transition format change")
+
+      clock.opened = false
+      tryVerify(function() {
+        return clock.secondsProgress > 0.05 && clock.secondsProgress < 0.95
+      }, 500, "reached mid-seconds-collapse")
+      clock.timeFormat = "HH:mm"
+      compare(clock.timeSlot, clock.compactTimeSlot, "mid-collapse long->short snaps coherently")
+      compare(secondsClip.width, 0)
+    }
+
+    // F5: Narrow-screen geometry constrains long native formats deterministically
+    // with readable elision, preserves center alignment and full stored format,
+    // and automatically restores unclipped progressive seconds when widened.
+    function test_narrowWidthDegradesWithElisionAndRecoversAutomatically() {
+      var prefix = findChild(clock, "clockTimePrefix")
+      var secondsClip = findChild(clock, "clockTimeSecondsClip")
+      verify(prefix !== null && secondsClip !== null)
+
+      var longFormat = "dddd d MMMM 'W'ww yyyy HH:mm"
+      clock.tier = "minimal"
+      clock.timeFormat = longFormat
+      clock.localeTag = "es-ES"
+
+      // Narrow logical screen (800 px, e.g. 1280 @ 1.6x or 1024 @ 1.25x) with
+      // fixed side groups (240 left, 260 right): available centered slot (224 px)
+      // is smaller than the long localized format.
+      var narrowCap = Layout.maxCenterWidth(800, 240, 260, theme.m)
+      verify(narrowCap > 0, "valid positive centered budget on 800 px")
+      verify(clock.naturalWidth > narrowCap, "long localized format exceeds narrow budget (" + clock.naturalWidth + " > " + narrowCap + ")")
+
+      clock.maximumWidth = narrowCap
+      verify(clock.constrained, "clock enters constrained mode when naturalWidth > maximumWidth")
+      compare(clock.timeFormat, longFormat, "stored selected format is never mutated")
+      compare(prefix.elide, Text.ElideRight, "constrained clock uses readable right elision")
+      tryVerify(function() { return clock.implicitWidth <= narrowCap }, 200, "clock width bounded to " + narrowCap + " (actual " + clock.implicitWidth + ")")
+      verify(!secondsClip.visible, "split seconds clip hidden while elided")
+
+      // Increased font scaling + reduced motion stays bounded cleanly.
+      Commons.Style.reduceMotion = true
+      Commons.Style.fontScale = 1.25
+      Commons.Style.spacing.scale = 1.25
+      var scaledCap = Layout.maxCenterWidth(900, 240, 260, theme.m)
+      clock.maximumWidth = scaledCap
+      verify(clock.constrained)
+      tryVerify(function() { return clock.implicitWidth <= scaledCap }, 200, "scaled narrow clock bounded to " + scaledCap)
+
+      // Widening back to 1920 px restores full unclipped representation & seconds reveal.
+      Commons.Style.fontScale = 1
+      Commons.Style.spacing.scale = 1
+      Commons.Style.reduceMotion = false
+      var wideCap = Layout.maxCenterWidth(1920, 240, 260, theme.m)
+      clock.maximumWidth = wideCap
+      verify(!clock.constrained, "clock recovers automatically when space is sufficient")
+      compare(prefix.elide, Text.ElideNone, "elision cleared on recovery")
+      clock.opened = true
+      tryCompare(clock, "timeSlot", clock.detailTimeSlot, 1000)
+      verify(secondsClip.visible && secondsClip.width === clock.secondsSlot, "progressive seconds reveal restored")
+      clock.opened = false
+
+      // Fixed side groups alone exceeding screen width returns 0 (pre-existing
+      // overflow, distinct from clock-induced overlap).
+      compare(Layout.maxCenterWidth(600, 320, 320, theme.m), 0)
     }
   }
 }

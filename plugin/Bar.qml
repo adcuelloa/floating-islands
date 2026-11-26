@@ -40,8 +40,17 @@ Item {
   readonly property var settings: Settings.read(barConfig, Identity.settingsKey)
   readonly property var clockConfig: ClockFormat.resolveClockConfig(barConfig, Identity.settingsKey)
   property string _localClockFormat: ""
+  property var _localCustomClockFormats: null
+  property string _localWeekStartDay: ""
   readonly property string clockFormat: _localClockFormat !== "" ? _localClockFormat : clockConfig.format
-  onBarConfigChanged: _localClockFormat = ""
+  readonly property var clockWeekStartDay: _localWeekStartDay !== "" ? _localWeekStartDay : clockConfig.weekStartDay
+  readonly property var clockLocale: Qt.locale(localeTag)
+  readonly property int effectiveWeekStart: ClockFormat.normalizedWeekStart(clockWeekStartDay, clockLocale.firstDayOfWeek)
+  onBarConfigChanged: {
+    _localClockFormat = ""
+    _localCustomClockFormats = null
+    _localWeekStartDay = ""
+  }
   readonly property var hostedEntries: Settings.hostedEntries(barConfig, settings)
   readonly property var publicLayout: JSON.parse(JSON.stringify(barConfig && barConfig.layout ? barConfig.layout : {}))
   // The `locale` setting, or the Omarchy language.
@@ -169,39 +178,19 @@ Item {
   }
 
   // Right-click on the clock (or `omarchy.clock cycleFormat` IPC): walk the
-  // native horizontal format ring and persist through Omarchy's supported
-  // inline entry write path (`updateEntryInline`), preserving unrelated config.
+  // native horizontal format ring (plus retained custom formats) and persist
+  // through Omarchy's supported shell contracts (`updateEntryInline` for
+  // straightforward native object updates, single `mutateShellConfig` for
+  // legacy migration, custom-format retention, string-entry upgrade, or
+  // missing-entry fallback).
   function cycleClockFormat() {
-    var cfg = root.clockConfig
-    var current = root.clockFormat
-    var ring = ClockFormat.formatRing(current, cfg.formatAlt, cfg.ring)
-    var next = ClockFormat.nextFormat(ring, current)
-    if (next === "" || next === current) return
+    ClockFormat.cycleClockFormatAction(root, root.shell, root.clockConfig, Identity.settingsKey)
+  }
 
-    // Applied locally first so the label changes on the click itself; the
-    // shell.json reload brings back the persisted value and clears the override.
-    root._localClockFormat = next
-
-    var persisted = false
-    if (cfg.nativeConfigured && root.shell && typeof root.shell.updateEntryInline === "function") {
-      var entry = ClockFormat.buildInlineClockEntry(cfg.nativeSettings, next)
-      persisted = root.shell.updateEntryInline("omarchy.clock", entry) === true
-      if (persisted && cfg.hasLegacyOverride && typeof root.shell.mutateShellConfig === "function") {
-        var key = Identity.settingsKey
-        root.shell.mutateShellConfig(function(config) {
-          if (config.bar && config.bar[key]) delete config.bar[key].timeFormat
-        })
-      }
-    }
-    if (!persisted && root.shell && typeof root.shell.mutateShellConfig === "function") {
-      var settingsKey = Identity.settingsKey
-      root.shell.mutateShellConfig(function(config) {
-        if (!config.bar || typeof config.bar !== "object" || Array.isArray(config.bar)) config.bar = ({})
-        if (!config.bar[settingsKey] || typeof config.bar[settingsKey] !== "object" || Array.isArray(config.bar[settingsKey]))
-          config.bar[settingsKey] = ({})
-        config.bar[settingsKey].timeFormat = next
-      })
-    }
+  // `omarchy.clock toggleWeekStart` IPC: toggle calendar week start between
+  // Monday and Sunday using Omarchy's native semantics and persistence path.
+  function toggleWeekStart() {
+    ClockFormat.toggleWeekStartAction(root, root.shell, root.clockConfig, Identity.settingsKey)
   }
 
   // Middle-click on the clock: open Omarchy's native timezone selector.
@@ -298,6 +287,10 @@ Item {
 
     function cycleFormat(): void {
       root.cycleClockFormat()
+    }
+
+    function toggleWeekStart(): void {
+      root.toggleWeekStart()
     }
 
     function open(): void {

@@ -16,6 +16,9 @@ Island {
   required property var strings
   property string tier: "full"
   property string timeFormat: "HH:mm"
+  property var weekStartDay: null
+  // Maximum centred width available between fixed side groups (0 = unconstrained).
+  property real maximumWidth: 0
   property var reach: ({ top: 0, bottom: 0 })
   // The bar facade panels coordinate through; without one (tests) the
   // calendar is not built.
@@ -66,6 +69,7 @@ Island {
       var bindings = {
         now: function() { return root.now },
         localeTag: function() { return root.localeTag },
+        weekStartDay: function() { return root.weekStartDay },
         open: function() { return root.opened }
       }
       for (var name in bindings) panel[name] = Qt.binding(bindings[name])
@@ -124,21 +128,21 @@ Island {
 
   // The time's slot: fits the idle time format by default, and expands to fit
   // seconds while hovered (after detailDelay), while the calendar is open, or
-  // when timeFormat explicitly includes seconds.
+  // when timeFormat explicitly includes seconds. Only the seconds reveal
+  // factor (0..1) animates, so changing timeFormat updates text and container
+  // geometry coherently in one step with no transient overflow or empty space.
   readonly property real prefixSlot: Math.ceil(prefixMetrics.advanceWidth)
   readonly property real secondsSlot: timeTextParts.expandable ? Math.ceil(secondsMetrics.advanceWidth) : 0
   readonly property real suffixSlot: suffixTimeText !== "" ? Math.ceil(suffixMetrics.advanceWidth) : 0
   readonly property real compactTimeSlot: prefixSlot + suffixSlot
   readonly property real detailTimeSlot: compactTimeSlot + secondsSlot
   readonly property real targetTimeSlot: secondsShown ? detailTimeSlot : compactTimeSlot
-  property real timeSlot: targetTimeSlot
-  readonly property real secondsRevealWidth: timeTextParts.expandable
-    ? Math.max(0, Math.min(secondsSlot, timeSlot - compactTimeSlot))
-    : 0
-  readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
+  readonly property real targetSecondsProgress: secondsShown ? 1 : 0
+  property bool _snappingFormat: false
+  property real secondsProgress: targetSecondsProgress
 
-  Behavior on timeSlot {
-    enabled: root.theme.widget > 0
+  Behavior on secondsProgress {
+    enabled: root.theme.widget > 0 && !root._snappingFormat
     NumberAnimation {
       duration: root.theme.widget
       easing.type: Easing.Bezier
@@ -146,12 +150,35 @@ Island {
     }
   }
 
+  onTimeFormatChanged: {
+    var nextTarget = (root.detailed || root.opened || ClockFormat.hasSecondsToken(root.timeFormat)) ? 1 : 0
+    root._snappingFormat = true
+    root.secondsProgress = nextTarget
+    root.secondsProgress = Qt.binding(function() { return root.targetSecondsProgress })
+    root._snappingFormat = false
+  }
+
+  readonly property real secondsRevealWidth: timeTextParts.expandable
+    ? secondsSlot * secondsProgress
+    : 0
+  readonly property real secondsRevealProgress: secondsSlot > 0 ? secondsRevealWidth / secondsSlot : 0
+  readonly property real timeSlot: compactTimeSlot + secondsRevealWidth
+
   readonly property real buttonPadding: Math.round(14 * theme.m.scale)
   readonly property real partGap: Math.round(12 * theme.m.scale)
   readonly property real wordGap: Math.round(5 * theme.m.scale)
 
   paddingLeft: Math.round(6 * theme.m.scale)
   paddingRight: Math.round(6 * theme.m.scale)
+
+  readonly property real chromeWidth: 2 * buttonPadding + paddingLeft + paddingRight + 2 * borderWidth + 1
+  readonly property real supplementaryWidth: (parts.date ? partGap + dateMetrics.advanceWidth : 0)
+    + (parts.weekday ? wordGap + weekdayMetrics.advanceWidth : 0)
+  readonly property real naturalWidth: Math.ceil(timeSlot + supplementaryWidth + chromeWidth)
+  readonly property bool constrained: maximumWidth > 0 && naturalWidth > maximumWidth
+  readonly property real effectiveTimeSlot: constrained
+    ? Math.max(0, Math.floor(maximumWidth - chromeWidth - supplementaryWidth))
+    : timeSlot
 
   function demandForSlot(forTier, slot) {
     var p = ClockFormat.partsFor(forTier, root.timeFormat)
@@ -238,7 +265,7 @@ Island {
 
       objectName: "clockTime"
       anchors.verticalCenter: parent.verticalCenter
-      width: root.timeSlot
+      width: root.effectiveTimeSlot
       height: prefixLabel.implicitHeight
       spacing: 0
 
@@ -247,10 +274,11 @@ Island {
 
         objectName: "clockTimePrefix"
         anchors.verticalCenter: parent.verticalCenter
-        width: root.prefixSlot
+        width: root.constrained ? root.effectiveTimeSlot : root.prefixSlot
         horizontalAlignment: Text.AlignLeft
+        elide: root.constrained ? Text.ElideRight : Text.ElideNone
         textFormat: Text.PlainText
-        text: root.prefixTimeText
+        text: root.constrained ? root.timeText : root.prefixTimeText
         color: root.theme.foreground
         font.family: root.theme.monoFamily
         font.pixelSize: root.theme.timeSize
@@ -265,7 +293,7 @@ Island {
         anchors.verticalCenter: parent.verticalCenter
         width: root.secondsRevealWidth
         height: prefixLabel.implicitHeight
-        visible: root.timeTextParts.expandable && width > 0
+        visible: !root.constrained && root.timeTextParts.expandable && width > 0
         clip: true
 
         Text {
@@ -288,7 +316,7 @@ Island {
         objectName: "clockTimeSuffix"
         anchors.verticalCenter: parent.verticalCenter
         width: root.suffixSlot
-        visible: root.suffixTimeText !== ""
+        visible: !root.constrained && root.suffixTimeText !== ""
         horizontalAlignment: Text.AlignLeft
         textFormat: Text.PlainText
         text: root.suffixTimeText

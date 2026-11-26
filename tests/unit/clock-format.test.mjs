@@ -176,3 +176,102 @@ test("resolveClockConfig and buildInlineClockEntry preserve native settings, leg
   assert.equal(absent.format, ClockFormat.DEFAULT_FORMAT);
   assert.equal(absent.formatAlt, ClockFormat.DEFAULT_ALT_FORMAT);
 });
+
+test("F4: valid custom formats longer than 64 characters are preserved while control chars and blanks are rejected", () => {
+  const longFormat = "dddd', 'd' of 'MMMM' 'yyyy' — Week ''W'ww' — Local Time 'HH:mm:ss' (UTC+00:00)'";
+  const longAlt = "'Archive Calendar Snapshot: 'dddd d MMMM yyyy 'ISO-W'ww 'at' h:mm:ss AP";
+  assert.ok(longFormat.length > 64, `expected >64 chars, got ${longFormat.length}`);
+  assert.ok(longAlt.length > 64, `expected >64 chars, got ${longAlt.length}`);
+
+  const resolved = ClockFormat.resolveClockConfig({
+    layout: { center: [{ id: "omarchy.clock", format: longFormat, formatAlt: longAlt }] },
+  }, "islands");
+  assert.equal(resolved.format, longFormat);
+  assert.equal(resolved.formatAlt, longAlt);
+  assert.ok(resolved.ring.includes(longFormat));
+  assert.ok(resolved.ring.includes(longAlt));
+
+  // Invalid inputs (blank, control chars, non-strings) still rejected cleanly.
+  assert.equal(ClockFormat.validFormatString(""), "");
+  assert.equal(ClockFormat.validFormatString("   "), "");
+  assert.equal(ClockFormat.validFormatString("HH:mm\n"), "");
+  assert.equal(ClockFormat.validFormatString("HH:mm\u0000"), "");
+  assert.equal(ClockFormat.validFormatString(42), "");
+});
+
+test("F6: custom format retention deduplicates, bounds growth, excludes presets, and preserves formatAlt", () => {
+  assert.deepEqual(ClockFormat.retainCustomFormat([], "HH:mm", "yyyy 'W'ww"), [], "native preset not retained");
+  assert.deepEqual(ClockFormat.retainCustomFormat([], "yyyy 'W'ww", "yyyy 'W'ww"), [], "formatAlt not duplicated");
+
+  let retained = ClockFormat.retainCustomFormat([], "HH:mm 'UTC'", "yyyy 'W'ww");
+  assert.deepEqual(retained, ["HH:mm 'UTC'"]);
+  retained = ClockFormat.retainCustomFormat(retained, "HH:mm 'UTC'", "yyyy 'W'ww");
+  assert.deepEqual(retained, ["HH:mm 'UTC'"], "deduplicated");
+
+  // Bounded to MAX_CUSTOM_FORMATS (8), keeping most recent entries.
+  for (let i = 1; i <= 12; i++) {
+    retained = ClockFormat.retainCustomFormat(retained, `HH:mm 'TZ${i}'`, "yyyy 'W'ww");
+  }
+  assert.equal(retained.length, ClockFormat.MAX_CUSTOM_FORMATS);
+  assert.equal(retained[retained.length - 1], "HH:mm 'TZ12'");
+  assert.equal(retained[0], "HH:mm 'TZ5'");
+});
+
+test("F7: weekStartDay normalization, toggling, and persistence match Omarchy semantics", () => {
+  assert.equal(ClockFormat.coerceWeekStart(null), null);
+  assert.equal(ClockFormat.coerceWeekStart(""), null);
+  assert.equal(ClockFormat.coerceWeekStart("monday"), 1);
+  assert.equal(ClockFormat.coerceWeekStart("MON"), 1);
+  assert.equal(ClockFormat.coerceWeekStart("sun"), 0);
+  assert.equal(ClockFormat.coerceWeekStart("saturday"), 6);
+  assert.equal(ClockFormat.coerceWeekStart(7), 0);
+  assert.equal(ClockFormat.coerceWeekStart(-1), 6);
+  assert.equal(ClockFormat.coerceWeekStart("bogus"), null);
+
+  assert.equal(ClockFormat.normalizedWeekStart(null, 0), 0, "falls back to locale Sunday");
+  assert.equal(ClockFormat.normalizedWeekStart("invalid", 1), 1, "falls back to locale Monday");
+  assert.equal(ClockFormat.normalizedWeekStart("saturday", 0), 6, "explicit overrides locale");
+
+  assert.equal(ClockFormat.toggledWeekStart(1), 0, "Monday toggles to Sunday");
+  assert.equal(ClockFormat.toggledWeekStart(0), 1, "Sunday toggles to Monday");
+  assert.equal(ClockFormat.toggledWeekStart(6), 1, "Saturday toggles to Monday");
+  assert.equal(ClockFormat.weekStartSettingName(0), "sunday");
+  assert.equal(ClockFormat.weekStartSettingName(1), "monday");
+});
+
+test("F1-F2: persistClockFormat and persistWeekStart distinguish unchanged vs rejected and mark durableConfirmed false", () => {
+  const cfg = ClockFormat.resolveClockConfig({
+    layout: { center: [{ id: "omarchy.clock", format: "HH:mm", weekStartDay: "monday" }] },
+  }, "islands");
+
+  // Unchanged native entry: returns accepted + unchanged without calling shell.
+  let inlineCalls = 0;
+  let mutateCalls = 0;
+  const spyShell = {
+    updateEntryInline: () => { inlineCalls++; return false; },
+    mutateShellConfig: () => { mutateCalls++; return false; },
+  };
+  const unchanged = ClockFormat.persistClockFormat(spyShell, cfg, "HH:mm");
+  assert.equal(unchanged.accepted, true);
+  assert.equal(unchanged.status, "unchanged");
+  assert.equal(unchanged.method, "none");
+  assert.equal(unchanged.durableConfirmed, false);
+  assert.equal(inlineCalls, 0);
+  assert.equal(mutateCalls, 0);
+
+  // Changed entry rejected by shell: classified as rejected, not unchanged.
+  const rejected = ClockFormat.persistClockFormat(spyShell, cfg, "h:mm AP");
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.method, "updateEntryInline");
+  assert.equal(rejected.durableConfirmed, false);
+  assert.equal(inlineCalls, 1);
+
+  // Unchanged weekStartDay returns unchanged; changed + rejected returns rejected.
+  const wsUnchanged = ClockFormat.persistWeekStart(spyShell, cfg, "monday");
+  assert.equal(wsUnchanged.accepted, true);
+  assert.equal(wsUnchanged.status, "unchanged");
+  const wsRejected = ClockFormat.persistWeekStart(spyShell, cfg, "sunday");
+  assert.equal(wsRejected.accepted, false);
+  assert.equal(wsRejected.status, "rejected");
+});
