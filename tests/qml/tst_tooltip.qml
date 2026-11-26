@@ -39,7 +39,22 @@ Item {
       tip.text = "<b>x</b>"
       compare(tip.children[1].textFormat, Text.PlainText)
       tip.shown = false
-      tryCompare(tip, "visible", false)
+      compare(tip.visible, false, "tooltip hides synchronously on leave before any anchor invalidation")
+      tryCompare(tip, "opacity", 0)
+      tip.shown = true
+    }
+
+    function test_hideBeforeAnchorResetDoesNotJumpVisibly() {
+      tip.anchorPoint = Qt.point(480, 50)
+      tip.shown = true
+      tryCompare(tip, "opacity", 1)
+      var shownX = tip.x
+      verify(shownX > tip.margin + 100)
+
+      // Hide synchronously; even if anchorPoint later resets, tooltip is already hidden.
+      tip.shown = false
+      compare(tip.visible, false)
+      compare(tip.x, shownX, "last valid x preserved when anchorPoint is kept")
       tip.shown = true
     }
   }
