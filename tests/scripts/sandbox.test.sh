@@ -655,7 +655,8 @@ fifo_go="$sandbox/gate-go.fifo"
 rm -f "$fifo_ready" "$fifo_go"
 mkfifo "$fifo_ready" "$fifo_go"
 
-# 9a. Acceptance-first contention -> acceptance succeeds -> waiting restore exits harmlessly.
+# 9a. Prolonged acceptance-first contention (exceeding previous configurable timeout)
+#     -> acceptance succeeds -> waiting dispatched restore exits harmlessly.
 branch --arm 30
 sid_c1=$(<"$bt/session")
 pre_c1_plugin=$(tree_digest "$installed")
@@ -674,14 +675,16 @@ mark=$(ncalls)
 env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
   OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
   SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
-  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=1 \
   bash "$bt/branch-test.sh" --restore --session "$sid_c1" >/dev/null 2>&1 &
 rpid=$!
 check "F1a: competing dispatched restore waits on lock held by --accept" wait_for_flock_on "$bt/lock"
+sleep 1.2
+check "  waiting restore is still blocked beyond previous 1s lock timeout" kill -0 "$rpid"
 printf 'go\n' >"$fifo_go"
 wait "$apid"; acc_rc=$?
 wait "$rpid"; rst_rc=$?
-check "  --accept succeeded under lock contention" test "$acc_rc" -eq 0
+check "  --accept succeeded under prolonged lock contention" test "$acc_rc" -eq 0
 check "  waiting dispatched restore exited harmlessly (0) after acceptance" test "$rst_rc" -eq 0
 check "  accepted plugin retained byte-for-byte" test "$(tree_digest "$installed")" = "$acc_c1_plugin"
 check "  accepted shell.json retained byte-for-byte" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_c1_cfg"
@@ -689,7 +692,8 @@ check "  state retired and no shell restart occurred" \
   bash -c "test ! -e '$bt' && ! tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
 rm -f "$installed/CONTEND-OK"
 
-# 9b. Acceptance-first contention -> acceptance fails before committing -> waiting restore rolls back.
+# 9b. Prolonged acceptance-first contention (exceeding previous configurable timeout)
+#     -> acceptance fails before committing -> waiting dispatched restore completes rollback.
 branch --arm 30
 sid_c2=$(<"$bt/session")
 pre_c2_plugin=$(tree_digest "$installed")
@@ -707,15 +711,17 @@ IFS= read -r _ <"$fifo_ready"
 env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
   OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
   SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
-  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=1 \
   bash "$bt/branch-test.sh" --restore --session "$sid_c2" >/dev/null 2>&1 &
 rpid=$!
 check "F1b: competing restore waits while failing --accept holds lock" wait_for_flock_on "$bt/lock"
+sleep 1.2
+check "  waiting restore did not time out beyond previous 1s lock timeout" kill -0 "$rpid"
 printf 'go\n' >"$fifo_go"
 wait "$apid"; acc_rc=$?
 wait "$rpid"; rst_rc=$?
 check "  failing --accept exited non-zero" test "$acc_rc" -ne 0
-check "  waiting dispatched restore proceeded and succeeded" test "$rst_rc" -eq 0
+check "  waiting dispatched restore proceeded and succeeded after prolonged contention" test "$rst_rc" -eq 0
 check "  original plugin restored byte-for-byte" test "$(tree_digest "$installed")" = "$pre_c2_plugin"
 check "  original shell.json restored byte-for-byte" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_c2_cfg"
 check "  state retired after rollback" test ! -e "$bt"
@@ -738,7 +744,7 @@ IFS= read -r _ <"$fifo_ready"
 env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
   OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
   SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
-  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  ISLANDS_BRANCH_TEST_DIR="$bt" \
   bash "$bt/branch-test.sh" --restore --session "$sid_c3" >/dev/null 2>&1 &
 rpid=$!
 check "F1c: competing restore waits while interrupted --accept holds lock" wait_for_flock_on "$bt/lock"

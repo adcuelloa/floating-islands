@@ -40,7 +40,6 @@ unit=islands-branch-restore
 boot_unit=islands-branch-restore-boot.service
 boot_unit_file="$HOME/.config/systemd/user/$boot_unit"
 protocol_version=2
-lock_wait_seconds=${ISLANDS_BRANCH_TEST_LOCK_WAIT:-60}
 retry_minutes=5
 retry_limit=24
 
@@ -77,8 +76,8 @@ state_safe() {
 
 # Acquire an exclusive lock on $state/lock.
 # mode="nowait" (manual invocations) fails fast; mode="wait" (dispatched
-# automatic triggers) waits up to $lock_wait_seconds so lock contention with
-# --accept never drops a recovery obligation.
+# automatic triggers) blocks until the lock is released so lock contention
+# with --accept can never silently drop a one-shot recovery obligation.
 # Returns 0 when the lock is held on the live $state/lock inode,
 # returns 2 when mode="wait" observes that $state was retired/replaced while waiting.
 acquire_lock() {
@@ -96,7 +95,7 @@ acquire_lock() {
     die "could not open lock in $state"
   fi
   if [[ $mode == wait ]]; then
-    flock -w "$lock_wait_seconds" 8 || { exec 8>&-; die "timed out waiting for lock in $state"; }
+    flock 8 || { exec 8>&-; die "failed to acquire lock in $state"; }
   else
     flock -n 8 || { exec 8>&-; die "another restore or accept is running"; }
   fi
