@@ -71,11 +71,32 @@ chmod +x "$stubs"/*
 overlay="$sandbox/omarchy"
 mkdir -p "$overlay/bin"
 for f in "$OMARCHY"/bin/*; do ln -s "$f" "$overlay/bin/${f##*/}"; done
-rm "$overlay/bin/omarchy-shell" "$overlay/bin/omarchy-restart-shell"
+rm "$overlay/bin/omarchy-shell" "$overlay/bin/omarchy-restart-shell" "$overlay/bin/omarchy-plugin-validate"
 cp "$stubs/omarchy-shell" "$overlay/bin/omarchy-shell"
 # Fails while restart-fails exists beside the call log (a locked screen).
-printf '#!/usr/bin/env bash\necho "restart-shell $*" >>"$SANDBOX_CALLS"\n[[ ! -e ${SANDBOX_CALLS%%/*}/restart-fails ]]\n' >"$overlay/bin/omarchy-restart-shell"
-chmod +x "$overlay/bin/omarchy-restart-shell"
+# Optional FIFO gate lets concurrency tests pause restore deterministically while holding the lock.
+cat >"$overlay/bin/omarchy-restart-shell" <<'EOF'
+#!/usr/bin/env bash
+echo "restart-shell $*" >>"$SANDBOX_CALLS"
+if [[ -n ${SANDBOX_RESTART_GATE_READY:-} ]]; then
+  printf 'ready\n' >"$SANDBOX_RESTART_GATE_READY"
+  IFS= read -r _ <"$SANDBOX_RESTART_GATE_GO"
+fi
+[[ ! -e ${SANDBOX_CALLS%/*}/restart-fails ]]
+EOF
+# Wraps the real omarchy-plugin-validate with an optional FIFO gate for deterministic concurrency tests.
+cat >"$overlay/bin/omarchy-plugin-validate" <<EOF
+#!/usr/bin/env bash
+if [[ -n \${SANDBOX_VALIDATE_GATE_READY:-} ]]; then
+  printf 'ready\n' >"\$SANDBOX_VALIDATE_GATE_READY"
+  IFS= read -r _ <"\$SANDBOX_VALIDATE_GATE_GO"
+fi
+if [[ \${SANDBOX_VALIDATE_FAIL:-0} == 1 ]]; then
+  exit 1
+fi
+exec "$OMARCHY/bin/omarchy-plugin-validate" "\$@"
+EOF
+chmod +x "$overlay/bin/omarchy-restart-shell" "$overlay/bin/omarchy-plugin-validate"
 cp -R "$OMARCHY/shell" "$overlay/shell"
 for d in "$OMARCHY"/*; do [[ -e $overlay/${d##*/} ]] || ln -s "$d" "$overlay/${d##*/}"; done
 OMARCHY=$overlay
@@ -329,9 +350,9 @@ check "  the snapshot is private (700)" test "$(stat -c %a "$bt")" = 700
 check "  it holds the plugin, shell.json, checksums and its own copy" \
   bash -c "diff -r '$installed' '$bt/plugin' && cmp '$config' '$bt/shell.json' && test -s '$bt/plugin.sha256' -a -s '$bt/branch-test.sh' -a -e '$bt/complete'"
 check "  the deadline is wall clock (OnCalendar), not monotonic" \
-  bash -c "since() { tail -n +$((mark + 1)) '$sandbox/calls.log'; }; since | grep -Eq -- '^systemd-run .*--on-calendar=[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} .*$bt/branch-test.sh --restore\$' && ! grep -q -- '--on-active' '$sandbox/calls.log'"
+  bash -c "sid=\$(cat '$bt/session'); since() { tail -n +$((mark + 1)) '$sandbox/calls.log'; }; since | grep -Eq -- \"^systemd-run .*--on-calendar=[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} .*$bt/branch-test.sh --restore --session \$sid\\\$\" && ! grep -q -- '--on-active' '$sandbox/calls.log'"
 check "  a login restore covers a reboot" \
-  bash -c "grep -q 'ConditionPathExists=$bt/complete' '$boot_unit' && grep -q 'ExecStart=/bin/bash $bt/branch-test.sh --restore' '$boot_unit' && grep -q 'Before=graphical-session-pre.target' '$boot_unit' && tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q 'systemctl --user enable --quiet islands-branch-restore-boot.service'"
+  bash -c "sid=\$(cat '$bt/session'); grep -q 'ConditionPathExists=$bt/complete' '$boot_unit' && grep -q \"ExecStart=/bin/bash $bt/branch-test.sh --restore --session \$sid\" '$boot_unit' && grep -q 'Before=graphical-session-pre.target' '$boot_unit' && tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q 'systemctl --user enable --quiet islands-branch-restore-boot.service'"
 check "  arming twice is refused" fails branch --arm 45
 
 # The test build and a test setting, as a supervised check would leave them.
@@ -400,7 +421,7 @@ check "branch-test restores files even when the restart is refused" branch --res
 check "  the plugin is the snapshot again" diff -r "$repo/plugin" "$installed"
 check "  shell.json matches the pretest checksum" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pretest"
 check "  a wall-clock restart retry is armed" \
-  bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -Eq -- '^systemd-run .*--on-calendar=.*branch-test.sh --restart 1\$'"
+  bash -c "sid=\$(cat '$bt/session'); tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -Eq -- \"^systemd-run .*--on-calendar=.*branch-test.sh --restart 1 --session \$sid\\\$\""
 rm -f "$sandbox/restart-fails"
 check "  the retry restarts the shell and removes the snapshot" \
   bash -c "env -i HOME='$home' PATH='$stubs:$OMARCHY/bin:/usr/bin:/bin' OMARCHY_PATH='$OMARCHY' SANDBOX_CALLS='$sandbox/calls.log' ISLANDS_BRANCH_TEST_DIR='$bt' bash '$bt/branch-test.sh' --restart 1 >/dev/null && test ! -e '$bt'"
@@ -425,6 +446,7 @@ echo "// accepted build marker" >"$installed/ACCEPTED-BUILD"
 jq '.bar.islands.extraHosted = ["omarchy.weather"]' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
 accepted_plugin=$(tree_digest "$installed")
 accepted_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+accept_sid=$(<"$bt/session")
 cp "$bt/branch-test.sh" "$sandbox/dispatched-branch-test.sh"
 
 mark=$(ncalls)
@@ -460,7 +482,7 @@ check "  no shell restart on repeated --accept" \
   fails bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
 
 check "previously dispatched restore cannot undo completed acceptance" \
-  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$sandbox/dispatched-branch-test.sh" --restore
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$sandbox/dispatched-branch-test.sh" --restore --session "$accept_sid"
 check "  accepted plugin unchanged after dispatched restore" \
   test "$(tree_digest "$installed")" = "$accepted_plugin"
 check "  accepted shell.json unchanged after dispatched restore" \
@@ -607,6 +629,238 @@ check "re-running --accept completes pending login-unit cleanup cleanly" branch 
 check "  armed state and boot unit are removed with no duplicate backup" \
   bash -c "test ! -e '$bt' && test ! -e '$boot_unit' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
 rm -f "$installed/CLEANUP-RETRY"
+
+# 9. F1: Real competing processes (deterministic FIFO gates, no arbitrary sleeps).
+wait_for_flock_on() {
+  local lock_path=$1 i p pid comm
+  for i in $(seq 1 200); do
+    for p in /proc/[0-9]*/comm; do
+      [[ -r $p ]] || continue
+      read -r comm <"$p" 2>/dev/null || continue
+      if [[ $comm == "flock" ]]; then
+        pid=${p#/proc/}
+        pid=${pid%/comm}
+        if [[ /proc/$pid/fd/8 -ef $lock_path ]]; then
+          return 0
+        fi
+      fi
+    done
+    sleep 0.02
+  done
+  return 1
+}
+
+fifo_ready="$sandbox/gate-ready.fifo"
+fifo_go="$sandbox/gate-go.fifo"
+rm -f "$fifo_ready" "$fifo_go"
+mkfifo "$fifo_ready" "$fifo_go"
+
+# 9a. Acceptance-first contention -> acceptance succeeds -> waiting restore exits harmlessly.
+branch --arm 30
+sid_c1=$(<"$bt/session")
+pre_c1_plugin=$(tree_digest "$installed")
+pre_c1_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+echo "// contend-accept-ok" >"$installed/CONTEND-OK"
+acc_c1_plugin=$(tree_digest "$installed")
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" \
+  SANDBOX_VALIDATE_GATE_READY="$fifo_ready" SANDBOX_VALIDATE_GATE_GO="$fifo_go" \
+  "$repo/scripts/branch-test.sh" --accept >/dev/null 2>&1 &
+apid=$!
+IFS= read -r _ <"$fifo_ready"
+mark=$(ncalls)
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  bash "$bt/branch-test.sh" --restore --session "$sid_c1" >/dev/null 2>&1 &
+rpid=$!
+check "F1a: competing dispatched restore waits on lock held by --accept" wait_for_flock_on "$bt/lock"
+printf 'go\n' >"$fifo_go"
+wait "$apid"; acc_rc=$?
+wait "$rpid"; rst_rc=$?
+check "  --accept succeeded under lock contention" test "$acc_rc" -eq 0
+check "  waiting dispatched restore exited harmlessly (0) after acceptance" test "$rst_rc" -eq 0
+check "  accepted plugin retained byte-for-byte" test "$(tree_digest "$installed")" = "$acc_c1_plugin"
+check "  accepted shell.json retained byte-for-byte" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_c1_cfg"
+check "  state retired and no shell restart occurred" \
+  bash -c "test ! -e '$bt' && ! tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell'"
+rm -f "$installed/CONTEND-OK"
+
+# 9b. Acceptance-first contention -> acceptance fails before committing -> waiting restore rolls back.
+branch --arm 30
+sid_c2=$(<"$bt/session")
+pre_c2_plugin=$(tree_digest "$installed")
+pre_c2_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+echo "// contend-accept-fail" >"$installed/CONTEND-FAIL"
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" \
+  SANDBOX_VALIDATE_GATE_READY="$fifo_ready" SANDBOX_VALIDATE_GATE_GO="$fifo_go" \
+  SANDBOX_VALIDATE_FAIL=1 \
+  "$repo/scripts/branch-test.sh" --accept >/dev/null 2>&1 &
+apid=$!
+IFS= read -r _ <"$fifo_ready"
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  bash "$bt/branch-test.sh" --restore --session "$sid_c2" >/dev/null 2>&1 &
+rpid=$!
+check "F1b: competing restore waits while failing --accept holds lock" wait_for_flock_on "$bt/lock"
+printf 'go\n' >"$fifo_go"
+wait "$apid"; acc_rc=$?
+wait "$rpid"; rst_rc=$?
+check "  failing --accept exited non-zero" test "$acc_rc" -ne 0
+check "  waiting dispatched restore proceeded and succeeded" test "$rst_rc" -eq 0
+check "  original plugin restored byte-for-byte" test "$(tree_digest "$installed")" = "$pre_c2_plugin"
+check "  original shell.json restored byte-for-byte" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_c2_cfg"
+check "  state retired after rollback" test ! -e "$bt"
+
+# 9c. Acceptance-first contention -> acceptance SIGKILLed before committing -> waiting restore rolls back
+#     immediately (also proving the child validator closed lock fd 8 and cannot hold the lock).
+branch --arm 30
+sid_c3=$(<"$bt/session")
+pre_c3_plugin=$(tree_digest "$installed")
+pre_c3_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+echo "// contend-accept-kill" >"$installed/CONTEND-KILL"
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" \
+  SANDBOX_VALIDATE_GATE_READY="$fifo_ready" SANDBOX_VALIDATE_GATE_GO="$fifo_go" \
+  "$repo/scripts/branch-test.sh" --accept >/dev/null 2>&1 &
+apid=$!
+IFS= read -r _ <"$fifo_ready"
+env -i HOME="$home" PATH="$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin" \
+  OMARCHY_PATH="$OMARCHY" SANDBOX_CALLS="$sandbox/calls.log" \
+  SHELL_STATE_FILE="$sandbox/shell-state" PING_STATE_FILE="$sandbox/ping-state" TERM=dumb \
+  ISLANDS_BRANCH_TEST_DIR="$bt" ISLANDS_BRANCH_TEST_LOCK_WAIT=15 \
+  bash "$bt/branch-test.sh" --restore --session "$sid_c3" >/dev/null 2>&1 &
+rpid=$!
+check "F1c: competing restore waits while interrupted --accept holds lock" wait_for_flock_on "$bt/lock"
+kill -9 "$apid" 2>/dev/null || true
+wait "$apid" 2>/dev/null || true
+wait "$rpid"; rst_rc=$?
+# Release the orphaned gate validator now that rollback has already completed.
+(printf 'go\n' >"$fifo_go") >/dev/null 2>&1 &
+unblock_pid=$!
+wait "$unblock_pid" 2>/dev/null || true
+check "  waiting dispatched restore rolled back after --accept SIGKILL" test "$rst_rc" -eq 0
+check "  original plugin restored byte-for-byte after SIGKILL" test "$(tree_digest "$installed")" = "$pre_c3_plugin"
+check "  original shell.json restored byte-for-byte after SIGKILL" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_c3_cfg"
+check "  state retired after SIGKILL recovery" test ! -e "$bt"
+
+# 9d. Restoration-first contention -> --accept refuses and cannot retain partially restored install.
+branch --arm 30
+sid_c4=$(<"$bt/session")
+pre_c4_plugin=$(tree_digest "$installed")
+echo "// contend-restore-first" >"$installed/CONTEND-RF"
+backups_before=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
+in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" \
+  SANDBOX_RESTART_GATE_READY="$fifo_ready" SANDBOX_RESTART_GATE_GO="$fifo_go" \
+  bash "$bt/branch-test.sh" --restore --session "$sid_c4" >/dev/null 2>&1 &
+rpid=$!
+IFS= read -r _ <"$fifo_ready"
+check "F1d: --accept refuses while competing --restore holds lock" fails branch --accept
+check "  refused --accept created no backup" \
+  test "$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)" = "$backups_before"
+printf 'go\n' >"$fifo_go"
+wait "$rpid"; rst_rc=$?
+check "  restoration-first --restore completed cleanly" test "$rst_rc" -eq 0
+check "  original plugin restored byte-for-byte" test "$(tree_digest "$installed")" = "$pre_c4_plugin"
+check "  state retired after restoration-first contention" test ! -e "$bt"
+
+# 10. F2: Legacy snapshot refusal and legacy backup manual recovery.
+branch --arm 30
+pre_leg_plugin=$(tree_digest "$installed")
+pre_leg_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+echo "// legacy-test-build" >"$installed/LEGACY-TEST"
+rm -f "$bt/protocol" "$bt/session"
+check "F2: --accept refuses a legacy armed snapshot without protocol/session" fails branch --accept
+check "  legacy snapshot was not rewritten in place" \
+  bash -c "test ! -e '$bt/protocol' && test ! -e '$bt/session' && test ! -e '$bt/accepted' && test -e '$bt/complete' && test -e '$boot_unit'"
+# Save a copy as a legacy backup before manual restore.
+legacy_backup="$sandbox/legacy-backup"
+rm -rf "$legacy_backup"
+cp -a "$bt" "$legacy_backup"
+rm -f "$legacy_backup/lock"
+check "  manual --restore still restores a legacy armed snapshot" branch --restore
+check "  original plugin restored from legacy snapshot" test "$(tree_digest "$installed")" = "$pre_leg_plugin"
+check "  original shell.json restored from legacy snapshot" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_leg_cfg"
+
+echo "// post-legacy-edit" >"$installed/POST-LEGACY"
+cp -a "$legacy_backup" "$bt"
+chmod 700 "$bt"
+check "F2: manual --restore succeeds from a legacy backup directory" branch --restore
+check "  original plugin restored from legacy backup" test "$(tree_digest "$installed")" = "$pre_leg_plugin"
+check "  original shell.json restored from legacy backup" test "$(sha256sum "$config" | cut -d' ' -f1)" = "$pre_leg_cfg"
+
+# 11. F3: Stale deadline, login and restart triggers across session reuse.
+branch --arm 30
+sid_old=$(<"$bt/session")
+cp "$bt/branch-test.sh" "$sandbox/stale-s1.sh"
+check "F3: first session accepted cleanly" branch --accept
+branch --arm 30
+sid_new=$(<"$bt/session")
+check "  re-armed session has a distinct session id" test "$sid_old" != "$sid_new"
+echo "// session2-build" >"$installed/SESSION2-BUILD"
+s2_plugin=$(tree_digest "$installed")
+s2_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+check "  stale deadline/login trigger for S1 exits 0 without touching S2" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$sandbox/stale-s1.sh" --restore --session "$sid_old"
+check "  stale restart trigger for S1 exits 0 without touching S2" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" bash "$sandbox/stale-s1.sh" --restart 1 --session "$sid_old"
+check "  S2 remains armed and its files are untouched" \
+  bash -c "test -f '$bt/complete' && test \"\$(cat '$bt/session')\" = '$sid_new' && test -e '$boot_unit' && test \"\$(cd '$installed' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)\" = '$s2_plugin' && test \"\$(sha256sum '$config' | cut -d' ' -f1)\" = '$s2_cfg'"
+branch --restore
+
+# 12. F4: daemon-reload failure is NOT skipped on retry after boot unit removal.
+branch --arm 30
+backups_before=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
+printf 'daemon-reload' >"$sandbox/systemctl-fail"
+check "F4: --accept fails when daemon-reload fails after boot-unit removal" fails branch --accept
+check "  boot unit is already removed, but accepted marker remains pending" \
+  bash -c "test ! -e '$boot_unit' && test -f '$bt/accepted' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
+check "  retrying --accept while daemon-reload still fails does NOT report success" fails branch --accept
+check "  accepted marker still present and no duplicate backup created" \
+  bash -c "test -f '$bt/accepted' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
+rm -f "$sandbox/systemctl-fail"
+mark=$(ncalls)
+check "  retrying --accept after daemon-reload recovers succeeds and runs daemon-reload" \
+  bash -c "env -i HOME='$home' PATH='$stubs:$OMARCHY/bin:/usr/local/bin:/usr/bin:/bin' OMARCHY_PATH='$OMARCHY' SANDBOX_CALLS='$sandbox/calls.log' SHELL_STATE_FILE='$sandbox/shell-state' PING_STATE_FILE='$sandbox/ping-state' TERM=dumb ISLANDS_BRANCH_TEST_DIR='$bt' '$repo/scripts/branch-test.sh' --accept >/dev/null 2>&1 && tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q 'systemctl --user daemon-reload' && test ! -e '$bt' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1))"
+
+# 13. F5: Failed final state retirement keeps accepted marker intact and recovers on retry.
+retire_parent="$sandbox/retire-parent"
+retire_bt="$retire_parent/branch-test"
+mkdir -m 700 -p "$retire_parent"
+rbranch() {
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$retire_bt" ISLANDS_BRANCH_TEST_BACKUP_DIR="$bt_backups" \
+    "$repo/scripts/branch-test.sh" "$@" >/dev/null 2>&1
+}
+rbranch --arm 30
+sid_f5=$(<"$retire_bt/session")
+echo "// retire-fail-build" >"$installed/RETIRE-FAIL"
+f5_plugin=$(tree_digest "$installed")
+f5_cfg=$(sha256sum "$config" | cut -d' ' -f1)
+backups_before=$(find "$bt_backups" -mindepth 1 -maxdepth 1 -type d | wc -l)
+chmod 500 "$retire_parent"
+check "F5: --accept fails conservatively when state directory cannot be retired" fails rbranch --accept
+check "  accepted and complete markers both remain intact (not exposed as restorable)" \
+  bash -c "test -f '$retire_bt/accepted' && test -f '$retire_bt/complete'"
+check "  dispatched restore after failed retirement exits harmlessly without reverting" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$retire_bt" ISLANDS_BRANCH_TEST_BACKUP_DIR="$bt_backups" \
+    bash "$retire_bt/branch-test.sh" --restore --session "$sid_f5"
+check "  manual restore after failed retirement refuses without reverting" fails rbranch --restore
+check "  accepted plugin unchanged after failed retirement" test "$(tree_digest "$installed")" = "$f5_plugin"
+chmod 700 "$retire_parent"
+check "  re-running --accept after parent dir becomes writable retires state cleanly" rbranch --accept
+check "  state retired, no duplicate backup, accepted install byte-for-byte intact" \
+  bash -c "test ! -e '$retire_bt' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1)) && test \"\$(cd '$installed' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)\" = '$f5_plugin' && test \"\$(sha256sum '$config' | cut -d' ' -f1)\" = '$f5_cfg'"
+rm -f "$installed/RETIRE-FAIL"
 
 # -------------------------------------- identity migration & legacy compat
 # Verify canonical id (floating-islands) and legacy id (islands.bar) across

@@ -39,6 +39,8 @@ backup_root=${ISLANDS_BRANCH_TEST_BACKUP_DIR:-${state}-backups}
 unit=islands-branch-restore
 boot_unit=islands-branch-restore-boot.service
 boot_unit_file="$HOME/.config/systemd/user/$boot_unit"
+protocol_version=2
+lock_wait_seconds=${ISLANDS_BRANCH_TEST_LOCK_WAIT:-60}
 retry_minutes=5
 retry_limit=24
 
@@ -46,6 +48,23 @@ say() { printf 'branch-test.sh: %s\n' "$*"; }
 die() { printf 'branch-test.sh: %s\n' "$*" >&2; exit 1; }
 
 deadline_in() { date -d "+$1 min" '+%Y-%m-%d %H:%M:%S'; }
+
+new_session_id() {
+  local uuid=""
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    read -r uuid </proc/sys/kernel/random/uuid || true
+  fi
+  if [[ $uuid =~ ^[0-9a-fA-F-]+$ ]]; then
+    printf '%s\n' "$uuid"
+  else
+    printf '%s-%s-%s\n' "$(date +%Y%m%d%H%M%S%N)" "$$" "$RANDOM"
+  fi
+}
+
+# Close the lock fd (8) before running external commands so systemd, child
+# processes or a restarted shell can never inherit and hold $state/lock.
+run_systemctl() { systemctl "$@" 8>&-; }
+run_systemd_run() { systemd-run "$@" 8>&-; }
 
 # A private directory is trusted only if it is ours, private (700) and real.
 dir_safe() {
@@ -56,14 +75,71 @@ state_safe() {
   dir_safe "$state"
 }
 
-# Acquire an exclusive non-blocking lock on $state/lock and verify the directory
-# and lock inode did not change while opening or locking.
+# Acquire an exclusive lock on $state/lock.
+# mode="nowait" (manual invocations) fails fast; mode="wait" (dispatched
+# automatic triggers) waits up to $lock_wait_seconds so lock contention with
+# --accept never drops a recovery obligation.
+# Returns 0 when the lock is held on the live $state/lock inode,
+# returns 2 when mode="wait" observes that $state was retired/replaced while waiting.
 acquire_lock() {
+  local mode=${1:-nowait}
+  if [[ ! -e $state && ! -L $state ]]; then
+    [[ $mode == wait ]] && return 2
+    die "nothing armed ($state)"
+  fi
+  state_safe || die "$state is not a private directory; refusing to proceed"
   [[ ! -L $state/lock ]] || die "unsafe lock file in $state"
-  exec 8>"$state/lock" || die "could not open lock in $state"
-  flock -n 8 || die "another restore or accept is running"
-  state_safe && [[ -f $state/lock && ! -L $state/lock && $state/lock -ef /dev/fd/8 ]] \
-    || die "$state changed while acquiring lock; refusing to proceed"
+  if ! exec 8>"$state/lock" 2>/dev/null; then
+    if [[ $mode == wait && ! -e $state && ! -L $state ]]; then
+      return 2
+    fi
+    die "could not open lock in $state"
+  fi
+  if [[ $mode == wait ]]; then
+    flock -w "$lock_wait_seconds" 8 || { exec 8>&-; die "timed out waiting for lock in $state"; }
+  else
+    flock -n 8 || { exec 8>&-; die "another restore or accept is running"; }
+  fi
+  if [[ ! -e $state && ! -L $state ]]; then
+    exec 8>&-
+    [[ $mode == wait ]] && return 2
+    die "$state disappeared while acquiring lock; refusing to proceed"
+  fi
+  state_safe || { exec 8>&-; die "$state is no longer a private directory; refusing to proceed"; }
+  if [[ ! -f $state/lock || -L $state/lock || ! $state/lock -ef /dev/fd/8 ]]; then
+    exec 8>&-
+    [[ $mode == wait ]] && return 2
+    die "$state changed while acquiring lock; refusing to proceed"
+  fi
+  return 0
+}
+
+# Atomically retire $state via same-filesystem rename before deleting it, so
+# an interrupted deletion can never leave an accepted snapshot exposed as
+# restorable or lose terminal markers before retirement commits.
+retire_state_dir() {
+  local retired
+  retired=$(umask 077 && mktemp -d "${state}.retired.XXXXXX") || return 1
+  if ! mv -- "$state" "$retired/state"; then
+    rmdir -- "$retired" 2>/dev/null || true
+    return 1
+  fi
+  exec 8>&- 2>/dev/null || true
+  if ! rm -rf -- "$retired"; then
+    say "retired state left at $retired; remove it manually" >&2
+    return 2
+  fi
+  return 0
+}
+
+# Validate that an automatic trigger's --session matches the active session.
+# Returns 0 if no session was requested (manual invocation) or it matches;
+# returns 1 if the trigger is stale (belongs to an earlier session).
+session_matches() {
+  local expected=$1
+  [[ -z $expected ]] && return 0
+  [[ -f $state/session && ! -L $state/session ]] || return 1
+  [[ $(<"$state/session") == "$expected" ]]
 }
 
 # Every regular file in a plugin tree with its checksum, in a stable order.
@@ -117,14 +193,14 @@ verify_current_install() {
   [[ $entry != /* && $entry != *..* && -f "$target/$entry" && ! -L "$target/$entry" ]] \
     || die "current plugin $id is missing bar entry point '$entry'; refusing to accept"
   if [[ -x $OMARCHY_PATH/bin/omarchy-plugin-validate ]]; then
-    "$OMARCHY_PATH/bin/omarchy-plugin-validate" "$target" >/dev/null 2>&1 \
+    "$OMARCHY_PATH/bin/omarchy-plugin-validate" "$target" >/dev/null 2>&1 8>&- \
       || die "omarchy-plugin-validate rejected current plugin $id; refusing to accept"
   fi
 }
 
 stop_restore_timer_strict() {
   local err rc=0
-  err=$(systemctl --user stop "$unit.timer" 2>&1) || rc=$?
+  err=$(run_systemctl --user stop "$unit.timer" 2>&1) || rc=$?
   if (( rc != 0 )); then
     # Exit 5 ("Unit ... not loaded") means the transient timer is already gone.
     if (( rc == 5 )) || [[ $err == *"not loaded"* ]]; then
@@ -132,34 +208,37 @@ stop_restore_timer_strict() {
     fi
     return "$rc"
   fi
-  systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+  run_systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
   return 0
 }
 
 remove_boot_unit_strict() {
   local wants_link="$HOME/.config/systemd/user/default.target.wants/$boot_unit"
   if [[ -e $boot_unit_file || -L $boot_unit_file || -L $wants_link ]]; then
-    systemctl --user disable --quiet "$boot_unit" >/dev/null 2>&1 || return 1
+    run_systemctl --user disable --quiet "$boot_unit" >/dev/null 2>&1 || return 1
     if [[ -e $boot_unit_file || -L $boot_unit_file ]]; then
       rm -f -- "$boot_unit_file" || return 1
     fi
     [[ ! -e $boot_unit_file && ! -L $boot_unit_file && ! -L $wants_link ]] || return 1
-    systemctl --user daemon-reload >/dev/null 2>&1 || return 1
   fi
+  # Always reload the systemd user manager so a retry after unit/symlink
+  # removal still completes daemon-reload before reporting cleanup success.
+  run_systemctl --user daemon-reload >/dev/null 2>&1 || return 1
   return 0
 }
 
 arm_timer() { # <minutes> <args for the snapshot's copy...>
   local minutes=$1
   shift
-  systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
-  systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
-  systemd-run --user --quiet --unit="$unit" --on-calendar="$(deadline_in "$minutes")" \
+  run_systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
+  run_systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+  run_systemd_run --user --quiet --unit="$unit" --on-calendar="$(deadline_in "$minutes")" \
     --timer-property=AccuracySec=5s --setenv=OMARCHY_PATH="$OMARCHY_PATH" \
     --setenv=ISLANDS_BRANCH_TEST_DIR="$state" /bin/bash "$state/branch-test.sh" "$@"
 }
 
 write_boot_unit() {
+  local sid=$1
   mkdir -p "${boot_unit_file%/*}" || return 1
   cat >"$boot_unit_file.tmp" <<EOF || return 1
 # Temporary: written by Floating Islands branch-test.sh --arm, removed by its
@@ -173,26 +252,26 @@ Before=graphical-session-pre.target
 Type=oneshot
 Environment=OMARCHY_PATH=$OMARCHY_PATH
 Environment=ISLANDS_BRANCH_TEST_DIR=$state
-ExecStart=/bin/bash $state/branch-test.sh --restore
+ExecStart=/bin/bash $state/branch-test.sh --restore --session $sid
 
 [Install]
 WantedBy=default.target
 EOF
-  mv -- "$boot_unit_file.tmp" "$boot_unit_file" && systemctl --user enable --quiet "$boot_unit"
+  mv -- "$boot_unit_file.tmp" "$boot_unit_file" && run_systemctl --user enable --quiet "$boot_unit"
 }
 
 remove_boot_unit() {
   [[ -e $boot_unit_file ]] || return 0
-  systemctl --user disable --quiet "$boot_unit" >/dev/null 2>&1 || true
+  run_systemctl --user disable --quiet "$boot_unit" >/dev/null 2>&1 || true
   rm -f -- "$boot_unit_file"
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  run_systemctl --user daemon-reload >/dev/null 2>&1 || true
 }
 
 # Only a running desktop has a shell to restart; at login (the boot unit),
 # the shell has not started yet and will read the restored files.
-session_up() { pgrep -x -u "$(id -u)" Hyprland >/dev/null 2>&1; }
+session_up() { pgrep -x -u "$(id -u)" Hyprland >/dev/null 2>&1 8>&-; }
 
-restart_shell() { "$OMARCHY_PATH/bin/omarchy-restart-shell" >/dev/null 2>&1; }
+restart_shell() { "$OMARCHY_PATH/bin/omarchy-restart-shell" >/dev/null 2>&1 8>&-; }
 
 cmd_arm() {
   local minutes=${1:-}
@@ -214,6 +293,8 @@ cmd_arm() {
   mkdir -p "${state%/*}" && mkdir -m 700 -- "$state" || die "could not create $state"
   state_safe || die "$state is not a private directory"
 
+  local sid
+  sid=$(new_session_id)
   # complete is written last; a restore refuses a snapshot without it.
   if ! { cp -a "$plugins_dir/$id" "$state/plugin" &&
          tree_sums "$plugins_dir/$id" >"$state/plugin.sha256" &&
@@ -222,41 +303,64 @@ cmd_arm() {
          cmp -s "$config" "$state/shell.json" &&
          sha256sum "$state/shell.json" | cut -d' ' -f1 >"$state/shell.json.sha256" &&
          printf '%s\n' "$id" >"$state/id" &&
+         printf '%s\n' "$protocol_version" >"$state/protocol" &&
+         printf '%s\n' "$sid" >"$state/session" &&
          cp "${BASH_SOURCE[0]}" "$state/branch-test.sh" &&
          : >"$state/complete"; }; then
     rm -rf -- "$state"
     die "could not write the snapshot; nothing was armed"
   fi
-  if ! write_boot_unit; then
+  if ! write_boot_unit "$sid"; then
     remove_boot_unit
     rm -rf -- "$state"
     die "could not install the login restore; nothing was armed"
   fi
-  if ! arm_timer "$minutes" --restore; then
+  if ! arm_timer "$minutes" --restore --session "$sid"; then
     remove_boot_unit
     rm -rf -- "$state"
     die "could not arm the restore timer; nothing was armed"
   fi
-  say "snapshot of $id and shell.json in $state"
+  say "snapshot of $id and shell.json in $state (session $sid)"
   say "restores by itself at $(deadline_in "$minutes") (wall clock), or at the next login after a reboot"
 }
 
 cmd_restore() {
-  [[ -e $state || -L $state ]] || die "nothing armed ($state)"
-  state_safe || die "$state is not a private directory; not trusting it (scripts/rollback.sh is the fallback)"
-  acquire_lock
+  local expected_session=${1:-}
+  local lock_mode=nowait lock_rc=0
+  if [[ -n $expected_session ]]; then
+    [[ $expected_session =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid session id '$expected_session'"
+    lock_mode=wait
+  fi
+  acquire_lock "$lock_mode" || lock_rc=$?
+  if (( lock_rc == 2 )); then
+    say "session $expected_session is no longer active; nothing to restore"
+    return 0
+  fi
+  if ! session_matches "$expected_session"; then
+    say "ignoring stale restore trigger for session $expected_session"
+    exec 8>&-
+    return 0
+  fi
   if [[ -e $state/accepted ]]; then
     local kept
     kept=$(cat "$state/accepted" 2>/dev/null || true)
+    exec 8>&-
+    if [[ -n $expected_session ]]; then
+      say "session $expected_session was already accepted (backup in ${kept:-unknown}); not restoring"
+      return 0
+    fi
     die "session in $state was already accepted (backup in ${kept:-unknown}); refusing to restore"
   fi
   [[ -e $state/complete && -s $state/shell.json && -d $state/plugin && -s $state/id ]] \
     || die "the snapshot in $state is incomplete; run scripts/rollback.sh"
-  local id
+  local id active_session=""
   id=$(<"$state/id")
   [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $id != *..* ]] || die "the snapshot names no usable plugin id"
   jq -e . "$state/shell.json" >/dev/null 2>&1 || die "the snapshot's shell.json is unreadable; run scripts/rollback.sh"
   verify_snapshot_dir "$state" || die "the snapshot in $state failed integrity verification; snapshot kept"
+  if [[ -f $state/session && ! -L $state/session ]]; then
+    active_session=$(<"$state/session")
+  fi
 
   # Mark restoration started before modifying live files so --accept cannot race
   # or run during a locked-screen --restart retry window.
@@ -282,7 +386,7 @@ cmd_restore() {
   [[ $(tree_sums "$target") == $(<"$state/plugin.sha256") ]] || die "the restored plugin does not match the snapshot; snapshot kept"
   [[ $(sha256sum "$config" | cut -d' ' -f1) == $(<"$state/shell.json.sha256") ]] || die "shell.json does not match the snapshot; snapshot kept"
   say "restored $id and shell.json (checksums match)"
-  systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
+  run_systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
   remove_boot_unit
 
   if ! session_up; then
@@ -292,21 +396,30 @@ cmd_restore() {
     say "shell restarted"
   else
     say "the shell refused to restart (locked screen?); retrying every $retry_minutes min"
-    arm_timer "$retry_minutes" --restart 1 || say "could not arm the retry; run: omarchy restart shell"
+    if [[ -n $active_session ]]; then
+      arm_timer "$retry_minutes" --restart 1 --session "$active_session" || say "could not arm the retry; run: omarchy restart shell"
+    else
+      arm_timer "$retry_minutes" --restart 1 || say "could not arm the retry; run: omarchy restart shell"
+    fi
+    exec 8>&-
     return 0
   fi
-  rm -rf -- "$state"
+  retire_state_dir || die "restored files, but could not retire $state"
 }
 
 cmd_accept() {
   command -v jq >/dev/null && command -v flock >/dev/null && command -v sha256sum >/dev/null \
     || die "jq, flock and sha256sum are required"
-  [[ -e $state || -L $state ]] || die "nothing armed ($state)"
-  state_safe || die "$state is not a private directory; refusing to accept"
-  acquire_lock
+  acquire_lock nowait
 
   if [[ -e $state/restoring ]]; then
     die "restore has already started in $state; refusing to accept (run --restore to finish)"
+  fi
+
+  # Reject snapshots armed by legacy script versions that do not support the
+  # acceptance protocol or per-arm session identity. Never rewrite them in place.
+  if [[ ! -f $state/protocol || -L $state/protocol || $(<"$state/protocol") != "$protocol_version" || ! -f $state/session || -L $state/session || ! $(<"$state/session") =~ ^[A-Za-z0-9._-]+$ ]]; then
+    die "snapshot in $state was armed by a legacy script version that does not support --accept; run --restore and re-arm with the current branch-test.sh"
   fi
 
   local backup_dir="" id=""
@@ -370,10 +483,15 @@ cmd_accept() {
     die "recovery cleanup did not complete; re-run --accept to finish cleanup (accepted bar is protected from restore)"
   fi
 
-  # Drop complete before removing $state so an interrupted deletion can never
-  # leave a restorable snapshot without its accepted marker.
-  rm -f -- "$state/complete"
-  rm -rf -- "$state" || die "cleanup completed but could not remove $state; backup is preserved in $backup_dir"
+  # Atomically retire $state so terminal acceptance markers remain intact until
+  # the active state path is cleanly removed in one rename.
+  local retire_rc=0
+  retire_state_dir || retire_rc=$?
+  if (( retire_rc == 1 )); then
+    die "recovery cleanup completed but could not retire $state; re-run --accept to retry (backup is preserved in $backup_dir)"
+  elif (( retire_rc != 0 )); then
+    die "accepted $id and retired $state, but final cleanup of retired directory failed (backup is preserved in $backup_dir)"
+  fi
   say "accepted current $id installation and shell.json (unchanged, no shell restart)"
   say "previous snapshot preserved in $backup_dir"
 }
@@ -381,19 +499,49 @@ cmd_accept() {
 # Files are back and verified; only the restart is retried, a bounded number of times.
 cmd_restart() {
   local attempt=${1:-1}
+  local expected_session=${2:-}
   [[ $attempt =~ ^[0-9]+$ ]] || attempt=$retry_limit
-  [[ -e $state || -L $state ]] || die "nothing armed ($state)"
-  state_safe || die "$state is not a private directory; not trusting it"
-  acquire_lock
-  [[ ! -e $state/accepted ]] || die "session in $state was accepted; refusing to restart"
+  local lock_mode=nowait lock_rc=0
+  if [[ -n $expected_session ]]; then
+    [[ $expected_session =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid session id '$expected_session'"
+    lock_mode=wait
+  fi
+  acquire_lock "$lock_mode" || lock_rc=$?
+  if (( lock_rc == 2 )); then
+    say "session $expected_session is no longer active; nothing to restart"
+    return 0
+  fi
+  if ! session_matches "$expected_session"; then
+    say "ignoring stale restart trigger for session $expected_session"
+    exec 8>&-
+    return 0
+  fi
+  if [[ -e $state/accepted ]]; then
+    exec 8>&-
+    if [[ -n $expected_session ]]; then
+      say "session $expected_session was already accepted; not restarting"
+      return 0
+    fi
+    die "session in $state was accepted; refusing to restart"
+  fi
   [[ -e $state/restoring ]] || die "no restore in progress in $state"
+  local active_session=""
+  if [[ -f $state/session && ! -L $state/session ]]; then
+    active_session=$(<"$state/session")
+  fi
   if ! session_up || restart_shell; then
     say "shell restarted"
-    rm -rf -- "$state"
+    retire_state_dir || die "shell restarted, but could not retire $state"
   elif (( attempt < retry_limit )); then
-    arm_timer "$retry_minutes" --restart $((attempt + 1))
+    if [[ -n $active_session ]]; then
+      arm_timer "$retry_minutes" --restart $((attempt + 1)) --session "$active_session"
+    else
+      arm_timer "$retry_minutes" --restart $((attempt + 1))
+    fi
+    exec 8>&-
   else
     say "gave up restarting the shell; files are restored, run: omarchy restart shell"
+    exec 8>&-
   fi
 }
 
@@ -403,21 +551,42 @@ cmd_status() {
   elif [[ -e $state/restoring ]]; then
     say "restoring: $(cat "$state/id" 2>/dev/null), snapshot in $state"
   elif [[ -e $state/complete ]]; then
-    say "armed: $(cat "$state/id" 2>/dev/null), snapshot in $state"
+    local sid=""
+    [[ -f $state/session && ! -L $state/session ]] && sid=" (session $(<"$state/session"))"
+    say "armed: $(cat "$state/id" 2>/dev/null)${sid}, snapshot in $state"
   elif [[ -e $state ]]; then
     say "incomplete snapshot in $state"
   else
     say "not armed"
   fi
   [[ -e $boot_unit_file ]] && say "login restore installed ($boot_unit_file)"
-  systemctl --user list-timers "$unit.timer" --no-pager 2>/dev/null | sed -n 2p
+  run_systemctl --user list-timers "$unit.timer" --no-pager 2>/dev/null | sed -n 2p
 }
 
 case ${1:-} in
   --arm) cmd_arm "${2:-}" ;;
-  --restore) cmd_restore ;;
-  --accept) cmd_accept ;;
-  --restart) cmd_restart "${2:-}" ;;
+  --restore)
+    if (( $# == 1 )); then
+      cmd_restore ""
+    elif (( $# == 3 )) && [[ $2 == --session && -n $3 ]]; then
+      cmd_restore "$3"
+    else
+      die "usage: branch-test.sh --restore [--session ID]"
+    fi
+    ;;
+  --accept)
+    (( $# == 1 )) || die "usage: branch-test.sh --accept"
+    cmd_accept
+    ;;
+  --restart)
+    if (( $# <= 2 )); then
+      cmd_restart "${2:-1}" ""
+    elif (( $# == 4 )) && [[ $3 == --session && -n $4 ]]; then
+      cmd_restart "${2:-1}" "$4"
+    else
+      die "usage: branch-test.sh --restart ATTEMPT [--session ID]"
+    fi
+    ;;
   --status) cmd_status ;;
   *) die "usage: branch-test.sh --arm MINUTES | --restore | --accept | --status" ;;
 esac

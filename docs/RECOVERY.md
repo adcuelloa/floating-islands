@@ -103,13 +103,22 @@ Three different ends:
 
 ### What `--accept` retains and preserves
 
+`scripts/branch-test.sh --arm` records an acceptance protocol version
+(`protocol` = `2`) and a unique per-arm session ID (`session`), and binds the
+deadline timer, login boot unit, and locked-screen restart retries to that
+session via `--session <id>`.
+
 Before accepting, `scripts/branch-test.sh --accept` verifies that:
 
 1. the armed snapshot directory (`~/.local/state/islands-branch-test`) is a
    real, owner-owned, mode `700` directory with a complete, checksum-valid
    snapshot;
-2. no restoration has started or completed (`restoring` marker or active lock);
-3. `~/.config/omarchy/shell.json` is valid version-1 JSON selecting the
+2. the snapshot was armed with the supported acceptance protocol (`protocol`
+   `2` and valid `session` ID) — snapshots armed by older script versions are
+   explicitly rejected without modifying them (run `--restore` and re-arm with
+   the current script);
+3. no restoration has started or completed (`restoring` marker or active lock);
+4. `~/.config/omarchy/shell.json` is valid version-1 JSON selecting the
    expected plugin ID, and the installed plugin passes manifest/entry-point
    validation (`omarchy-plugin-validate` when available).
 
@@ -124,30 +133,42 @@ Once verified, `--accept`:
   directory under `~/.local/state/islands-branch-test-backups/<id>-<timestamp>.<random>`.
   Existing recovery backups are never overwritten or automatically pruned.
 - **Commits** a terminal `accepted` marker before stopping the transient
-  deadline timer and removing `islands-branch-restore-boot.service`, so an
-  already-dispatched timer or login restore cannot revert an accepted
-  installation. If timer or login-unit cleanup fails, `--accept` exits non-zero
-  and keeps the `accepted` marker so the accepted bar remains protected until
-  you re-run `scripts/branch-test.sh --accept` to finish cleanup.
+  deadline timer and removing `islands-branch-restore-boot.service`. Dispatched
+  automatic triggers wait on the shared lock and revalidate state, lock
+  identity, session ID, and terminal markers: if acceptance succeeded they exit
+  harmlessly; if acceptance failed or was interrupted before committing they
+  proceed with rollback; and stale triggers from an earlier session never
+  affect a subsequent session.
+- **Retires state safely and retries cleanup idempotently:** if stopping the
+  timer, disabling/removing the boot unit, running `systemctl --user daemon-reload`,
+  or atomically retiring `~/.local/state/islands-branch-test` fails, `--accept`
+  exits non-zero while keeping the `accepted` marker and verified backup
+  intact. Re-running `scripts/branch-test.sh --accept` completes all remaining
+  cleanup (including `daemon-reload` even after the boot unit file is already
+  gone) without duplicating the backup.
 
 ### Restoring a preserved backup after acceptance
 
-To roll back to a previously accepted snapshot preserved under
+Manual `--restore` remains compatible with both new and legacy snapshots and
+backups. To roll back to a preserved backup under
 `~/.local/state/islands-branch-test-backups/`:
 
-1. Confirm no branch-test session is currently armed (`scripts/branch-test.sh --status`).
+1. Confirm no active branch-test state directory or symlink exists (`scripts/branch-test.sh --status`).
 2. Copy the chosen backup directory into `~/.local/state/islands-branch-test`
-   (copying keeps the original backup directory untouched):
+   only when the destination path does not exist (copying keeps the original
+   backup directory untouched):
 
    ```bash
-   cp -a ~/.local/state/islands-branch-test-backups/<backup-name> ~/.local/state/islands-branch-test
-   chmod 700 ~/.local/state/islands-branch-test
-   scripts/branch-test.sh --restore
+   state="${XDG_STATE_HOME:-$HOME/.local/state}/islands-branch-test"
+   test ! -e "$state" && test ! -L "$state" && \
+     cp -a ~/.local/state/islands-branch-test-backups/<backup-name> "$state" && \
+     chmod 700 "$state" && \
+     scripts/branch-test.sh --restore
    ```
 
 `--restore` verifies the snapshot checksums, atomically swaps the previous
 plugin and `shell.json` back into place, verifies the restored files, restarts
-the shell, and removes `~/.local/state/islands-branch-test` while leaving the
+the shell, and retires `~/.local/state/islands-branch-test` while leaving the
 preserved copy in `~/.local/state/islands-branch-test-backups/` intact.
 
 The restore has two temporary triggers, both removed once the restored files
