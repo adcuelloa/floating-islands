@@ -48,7 +48,8 @@ Offscreen tests use stubs for Hyprland, Pipewire, NetworkManager, BlueZ, UPower,
 
 1. Read [docs/RECOVERY.md](RECOVERY.md) first.
 2. From the stock bar, use `scripts/activate.sh --confirm --watchdog 30`.
-3. Over an already-installed Floating Islands bar, use `scripts/branch-test.sh --arm 45` before `scripts/install.sh` and `omarchy restart shell`, then `scripts/branch-test.sh --restore` when done.
+3. Over an already-installed Floating Islands bar, follow the local-first workflow:
+   implement → `scripts/branch-test.sh --arm 45` + `scripts/install.sh` + `omarchy restart shell` (protected preview) → owner feedback → correct → validate (`tests/run-all.sh`) → either `scripts/branch-test.sh --restore` to revert or `scripts/branch-test.sh --accept` to explicitly retain the current local installation without reinstalling or restarting the shell (preserving the prior snapshot under `~/.local/state/islands-branch-test-backups/`). Accepting a local preview is independent of committing, pushing, merging, or publishing changes in git.
 4. In PR descriptions, explicitly distinguish **automated/offscreen evidence** from **live Wayland/hardware evidence**.
 
 ## Current Verification Coverage (Live vs. Offscreen)
