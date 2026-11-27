@@ -211,8 +211,33 @@ terminal, the session that armed it or the repository's branch.
   can simply be run again.
 - If the shell refuses to restart (a locked screen), the files stay
   restored and only the restart is retried every 5 minutes, at most 24 times.
-  With no desktop session (the login case) no restart is needed.
-- `--status` shows the snapshot, the login unit and the deadline.
+  Each retry uses a distinct per-attempt transient user timer/service unit
+  (`islands-branch-restore-retry-1` through `islands-branch-restore-retry-24`)
+  so arming the next retry never collides with the currently active restore or
+  retry service.
+  - Because `islands-branch-restore-boot.service` is already disabled and
+    removed as soon as the restored plugin and `shell.json` pass checksum
+    verification, login recovery does not run again after files are restored:
+    a reboot or re-login starts the shell directly from the restored files,
+    while any remaining `restoring` state in `~/.local/state/islands-branch-test`
+    is retired by a later retry or a manual `scripts/branch-test.sh --restore`.
+  - If all 24 retry attempts are exhausted, or if scheduling a retry timer
+    fails, the files remain restored and `~/.local/state/islands-branch-test`
+    stays pending with its `restoring` marker instead of being retired. Finish
+    recovery manually once unlocked by running `scripts/branch-test.sh --restore`
+    (or `omarchy restart shell`, followed by `scripts/branch-test.sh --restore`
+    to retire the pending state; `scripts/rollback.sh` remains available as the
+    emergency stock-bar fallback).
+  - With no desktop session (the login case, or a retry firing after logout) no
+    shell restart is needed and the pending state is retired.
+- Existing armed snapshots (and preserved backups under
+  `~/.local/state/islands-branch-test-backups/`) retain the copy of
+  `branch-test.sh` captured when `--arm` ran. Automated timers and boot units
+  execute that snapshot copy; to use an updated `branch-test.sh` for automated
+  retries, complete or restore the existing session and re-arm with the current
+  script (or run the repository's `scripts/branch-test.sh --restore` manually).
+- `--status` shows the snapshot, the login unit and any armed deadline or retry
+  timer.
 
 ## Options
 
@@ -252,5 +277,8 @@ Observed live ([docs/TESTING.md](TESTING.md)):
   by itself;
 - `shell.json` identical to the pre-activation snapshot each time.
 
-The shell's fallback on a load error has still not been observed live, and
-`--restart` is never run in the tests.
+The shell's fallback on a load error and a full live locked-screen recovery
+against `omarchy-shell` have still not been observed live (`branch-test.sh
+--restart` retry chaining is verified in the bubblewrap sandbox and isolated
+real-systemd transient-unit checks, while `rollback.sh` never restarts a live
+shell during automated tests).

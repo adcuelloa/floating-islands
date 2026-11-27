@@ -197,17 +197,28 @@ verify_current_install() {
   fi
 }
 
+stop_retry_timers() {
+  local active_timers t
+  active_timers=$(run_systemctl --user list-units --type=timer --all --no-legend --plain "${unit}-retry-*.timer" 2>/dev/null | awk '{print $1}') || true
+  for t in $active_timers; do
+    run_systemctl --user stop "$t" >/dev/null 2>&1 || true
+    run_systemctl --user reset-failed "${t%.timer}.service" >/dev/null 2>&1 || true
+  done
+}
+
 stop_restore_timer_strict() {
   local err rc=0
   err=$(run_systemctl --user stop "$unit.timer" 2>&1) || rc=$?
   if (( rc != 0 )); then
     # Exit 5 ("Unit ... not loaded") means the transient timer is already gone.
     if (( rc == 5 )) || [[ $err == *"not loaded"* ]]; then
+      stop_retry_timers
       return 0
     fi
     return "$rc"
   fi
   run_systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+  stop_retry_timers
   return 0
 }
 
@@ -226,14 +237,19 @@ remove_boot_unit_strict() {
   return 0
 }
 
-arm_timer() { # <minutes> <args for the snapshot's copy...>
-  local minutes=$1
-  shift
-  run_systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
-  run_systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
-  run_systemd_run --user --quiet --unit="$unit" --on-calendar="$(deadline_in "$minutes")" \
+arm_timer_unit() { # <unit> <minutes> <args for the snapshot's copy...>
+  local target_unit=$1
+  local minutes=$2
+  shift 2
+  run_systemctl --user stop "$target_unit.timer" >/dev/null 2>&1 || true
+  run_systemctl --user reset-failed "$target_unit.service" >/dev/null 2>&1 || true
+  run_systemd_run --user --quiet --unit="$target_unit" --on-calendar="$(deadline_in "$minutes")" \
     --timer-property=AccuracySec=5s --setenv=OMARCHY_PATH="$OMARCHY_PATH" \
     --setenv=ISLANDS_BRANCH_TEST_DIR="$state" /bin/bash "$state/branch-test.sh" "$@"
+}
+
+arm_timer() { # <minutes> <args for the snapshot's copy...>
+  arm_timer_unit "$unit" "$@"
 }
 
 write_boot_unit() {
@@ -386,6 +402,7 @@ cmd_restore() {
   [[ $(sha256sum "$config" | cut -d' ' -f1) == $(<"$state/shell.json.sha256") ]] || die "shell.json does not match the snapshot; snapshot kept"
   say "restored $id and shell.json (checksums match)"
   run_systemctl --user stop "$unit.timer" >/dev/null 2>&1 || true
+  stop_retry_timers
   remove_boot_unit
 
   if ! session_up; then
@@ -395,10 +412,13 @@ cmd_restore() {
     say "shell restarted"
   else
     say "the shell refused to restart (locked screen?); retrying every $retry_minutes min"
-    if [[ -n $active_session ]]; then
-      arm_timer "$retry_minutes" --restart 1 --session "$active_session" || say "could not arm the retry; run: omarchy restart shell"
-    else
-      arm_timer "$retry_minutes" --restart 1 || say "could not arm the retry; run: omarchy restart shell"
+    local retry_args=(--restart 1)
+    [[ -n $active_session ]] && retry_args+=(--session "$active_session")
+    # Use a distinct retry unit so arming never collides with the active restore service.
+    if ! arm_timer_unit "${unit}-retry-1" "$retry_minutes" "${retry_args[@]}"; then
+      say "could not arm the retry; run: omarchy restart shell" >&2
+      exec 8>&-
+      return 1
     fi
     exec 8>&-
     return 0
@@ -528,14 +548,23 @@ cmd_restart() {
   if [[ -f $state/session && ! -L $state/session ]]; then
     active_session=$(<"$state/session")
   fi
-  if ! session_up || restart_shell; then
+  if ! session_up; then
+    stop_retry_timers
+    say "no desktop session; the shell will start from the restored files"
+    retire_state_dir || die "restored files, but could not retire $state"
+  elif restart_shell; then
+    stop_retry_timers
     say "shell restarted"
     retire_state_dir || die "shell restarted, but could not retire $state"
   elif (( attempt < retry_limit )); then
-    if [[ -n $active_session ]]; then
-      arm_timer "$retry_minutes" --restart $((attempt + 1)) --session "$active_session"
-    else
-      arm_timer "$retry_minutes" --restart $((attempt + 1))
+    local next_attempt=$((attempt + 1))
+    local retry_args=(--restart "$next_attempt")
+    [[ -n $active_session ]] && retry_args+=(--session "$active_session")
+    # Use a per-attempt retry unit so arming never collides with the active retry service.
+    if ! arm_timer_unit "${unit}-retry-${next_attempt}" "$retry_minutes" "${retry_args[@]}"; then
+      say "could not arm the retry; run: omarchy restart shell" >&2
+      exec 8>&-
+      return 1
     fi
     exec 8>&-
   else
@@ -559,7 +588,7 @@ cmd_status() {
     say "not armed"
   fi
   [[ -e $boot_unit_file ]] && say "login restore installed ($boot_unit_file)"
-  run_systemctl --user list-timers "$unit.timer" --no-pager 2>/dev/null | sed -n 2p
+  run_systemctl --user list-timers "$unit.timer" "${unit}-retry-*.timer" --no-pager 2>/dev/null | sed -n 2p
 }
 
 case ${1:-} in
