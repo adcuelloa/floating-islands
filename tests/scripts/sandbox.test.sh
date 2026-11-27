@@ -952,6 +952,20 @@ check "subsequent --restore completes interrupted recovery" branch --restore
 check "  interrupted file removed and state retired" \
   bash -c "test ! -e '$installed/INTERRUPTED' && test ! -e '$bt'"
 
+# --restart with no graphical session logs the no-session message accurately and retires state.
+branch --arm 30
+lock_sid3=$(<"$bt/session")
+touch "$sandbox/restart-fails"
+in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore.service" \
+  bash "$bt/branch-test.sh" --restore --session "$lock_sid3" >/dev/null
+rm -f "$sandbox/restart-fails" "$sandbox/hypr-up"
+no_session_out=$(in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore-retry-1.service" \
+  bash "$bt/branch-test.sh" --restart 1 --session "$lock_sid3" 2>&1)
+no_session_rc=$?
+touch "$sandbox/hypr-up"
+check "no-session --restart reports no desktop session instead of shell restarted" \
+  bash -c "test '$no_session_rc' -eq 0 && [[ '$no_session_out' == *'no desktop session; the shell will start from the restored files'* ]] && [[ '$no_session_out' != *'shell restarted'* ]] && test ! -e '$bt'"
+
 # -------------------------------------- identity migration & legacy compat
 # Verify canonical id (floating-islands) and legacy id (islands.bar) across
 # install, TTY rollback, upgrade, failed upgrade, failed fresh activation,

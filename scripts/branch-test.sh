@@ -548,7 +548,11 @@ cmd_restart() {
   if [[ -f $state/session && ! -L $state/session ]]; then
     active_session=$(<"$state/session")
   fi
-  if ! session_up || restart_shell; then
+  if ! session_up; then
+    stop_retry_timers
+    say "no desktop session; the shell will start from the restored files"
+    retire_state_dir || die "restored files, but could not retire $state"
+  elif restart_shell; then
     stop_retry_timers
     say "shell restarted"
     retire_state_dir || die "shell restarted, but could not retire $state"
