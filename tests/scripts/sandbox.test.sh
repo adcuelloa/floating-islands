@@ -49,8 +49,26 @@ case $args in
 esac
 EOF
 printf '#!/usr/bin/env bash\necho "hyprctl $*" >>"$SANDBOX_CALLS"\n' >"$stubs/hyprctl"
-# Timers are recorded, never created.
-printf '#!/usr/bin/env bash\necho "systemd-run $*" >>"$SANDBOX_CALLS"\n' >"$stubs/systemd-run"
+# Timers are recorded, never created; enforce systemd's active-service unit collision invariant.
+cat >"$stubs/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+echo "systemd-run $*" >>"$SANDBOX_CALLS"
+fail_file="${SANDBOX_CALLS%/*}/systemd-run-fail"
+if [[ -e $fail_file ]]; then
+  echo "simulated systemd-run failure: $*" >&2
+  exit 1
+fi
+target_unit=""
+for arg in "$@"; do
+  case $arg in
+    --unit=*) target_unit="${arg#--unit=}" ;;
+  esac
+done
+if [[ -n ${SANDBOX_ACTIVE_SERVICE_UNIT:-} && -n $target_unit && "${target_unit}.service" == "$SANDBOX_ACTIVE_SERVICE_UNIT" ]]; then
+  echo "Failed to start transient timer unit: Unit ${target_unit}.service already exists." >&2
+  exit 1
+fi
+EOF
 cat >"$stubs/systemctl" <<'EOF'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$SANDBOX_CALLS"
@@ -867,6 +885,72 @@ check "  re-running --accept after parent dir becomes writable retires state cle
 check "  state retired, no duplicate backup, accepted install byte-for-byte intact" \
   bash -c "test ! -e '$retire_bt' && test \"\$(find '$bt_backups' -mindepth 1 -maxdepth 1 -type d | wc -l)\" = $((backups_before + 1)) && test \"\$(cd '$installed' && find . -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)\" = '$f5_plugin' && test \"\$(sha256sum '$config' | cut -d' ' -f1)\" = '$f5_cfg'"
 rm -f "$installed/RETIRE-FAIL"
+
+# 14. Locked-session retry reliability: active-service unit isolation, repeated
+#     temporary restart failures, delayed recovery, retry-arming failure, bounded
+#     retry exhaustion, and interrupted recovery.
+seed_config
+in_sandbox "$repo/scripts/install.sh" >/dev/null
+jq --arg id "$plugin_id" '.bar.id = $id' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
+lock_pretest=$(sha256sum "$config" | cut -d' ' -f1)
+
+branch --arm 30
+lock_sid=$(<"$bt/session")
+echo "// experimental build" >"$installed/LOCKED-TRIAL"
+touch "$sandbox/restart-fails"
+mark=$(ncalls)
+check "locked-session deadline restore inside islands-branch-restore.service arms retry-1" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore.service" \
+    bash "$bt/branch-test.sh" --restore --session "$lock_sid"
+check "  files and shell.json restored while restoring marker remains pending" \
+  bash -c "diff -r '$repo/plugin' '$installed' && test \"\$(sha256sum '$config' | cut -d' ' -f1)\" = '$lock_pretest' && test -f '$bt/restoring'"
+check "  retry-1 timer armed with distinct unit and session id" \
+  bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -Eq -- \"^systemd-run .*--unit=islands-branch-restore-retry-1 .*--restart 1 --session $lock_sid\\\$\""
+
+mark=$(ncalls)
+check "repeated locked-session failure in retry-1 service arms retry-2" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore-retry-1.service" \
+    bash "$bt/branch-test.sh" --restart 1 --session "$lock_sid"
+check "  retry-2 timer armed and restoring marker still pending" \
+  bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -Eq -- \"^systemd-run .*--unit=islands-branch-restore-retry-2 .*--restart 2 --session $lock_sid\\\$\" && test -f '$bt/restoring'"
+
+mark=$(ncalls)
+check "repeated locked-session failure in retry-2 service arms retry-3" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore-retry-2.service" \
+    bash "$bt/branch-test.sh" --restart 2 --session "$lock_sid"
+check "  retry-3 timer armed and restoring marker still pending" \
+  bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -Eq -- \"^systemd-run .*--unit=islands-branch-restore-retry-3 .*--restart 3 --session $lock_sid\\\$\" && test -f '$bt/restoring'"
+
+mark=$(ncalls)
+check "bounded retry limit (attempt 24) stops arming and preserves restoring state" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore-retry-24.service" \
+    bash "$bt/branch-test.sh" --restart 24 --session "$lock_sid"
+check "  no retry-25 armed and restoring marker preserved" \
+  bash -c "! tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q 'islands-branch-restore-retry-25' && test -f '$bt/restoring'"
+
+rm -f "$sandbox/restart-fails"
+mark=$(ncalls)
+check "delayed recovery succeeds once session unlocks" \
+  in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore-retry-3.service" \
+    bash "$bt/branch-test.sh" --restart 3 --session "$lock_sid"
+check "  shell restarted and state retired after delayed recovery" \
+  bash -c "tail -n +$((mark + 1)) '$sandbox/calls.log' | grep -q '^restart-shell' && test ! -e '$bt'"
+
+# Retry-arming failure preserves restoring state and reports failure honestly.
+branch --arm 30
+lock_sid2=$(<"$bt/session")
+touch "$sandbox/restart-fails" "$sandbox/systemd-run-fail"
+check "retry-arming failure inside restore service exits non-zero" \
+  fails in_sandbox env ISLANDS_BRANCH_TEST_DIR="$bt" SANDBOX_ACTIVE_SERVICE_UNIT="islands-branch-restore.service" \
+    bash "$bt/branch-test.sh" --restore --session "$lock_sid2"
+check "  restoring marker preserved when retry-arming fails" test -f "$bt/restoring"
+rm -f "$sandbox/systemd-run-fail" "$sandbox/restart-fails"
+
+# Interrupted recovery with stale files and pending restoring marker recovers cleanly on --restore.
+echo "// interrupted restore leftover" >"$installed/INTERRUPTED"
+check "subsequent --restore completes interrupted recovery" branch --restore
+check "  interrupted file removed and state retired" \
+  bash -c "test ! -e '$installed/INTERRUPTED' && test ! -e '$bt'"
 
 # -------------------------------------- identity migration & legacy compat
 # Verify canonical id (floating-islands) and legacy id (islands.bar) across
